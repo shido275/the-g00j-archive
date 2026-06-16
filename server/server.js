@@ -1262,7 +1262,13 @@ app.get('/api/files/:id/metadata', async (req, res) => {
           album: mmData.common.album || '',
           year: mmData.common.year || '',
           genre: mmData.common.genre ? mmData.common.genre.join(', ') : '',
-          trackNumber: mmData.common.track && mmData.common.track.no ? String(mmData.common.track.no) : ''
+          trackNumber: mmData.common.track && mmData.common.track.no ? String(mmData.common.track.no) : '',
+          albumArtist: mmData.common.albumartist || '',
+          composer: mmData.common.composer ? mmData.common.composer.join(', ') : '',
+          publisher: mmData.common.label ? mmData.common.label.join(', ') : '',
+          bpm: mmData.common.bpm ? String(mmData.common.bpm) : '',
+          discNumber: mmData.common.disk && mmData.common.disk.no ? String(mmData.common.disk.no) : '',
+          comment: mmData.common.comment && mmData.common.comment[0] ? mmData.common.comment[0].text : ''
         };
         if (mmData.common.picture && mmData.common.picture.length > 0) {
           const pic = mmData.common.picture[0];
@@ -1283,7 +1289,13 @@ app.get('/api/files/:id/metadata', async (req, res) => {
         album: file.album || parsedTags.album || '',
         year: file.year || parsedTags.year || '',
         genre: file.genre || parsedTags.genre || '',
-        trackNumber: file.trackNumber || parsedTags.trackNumber || ''
+        trackNumber: file.trackNumber || parsedTags.trackNumber || '',
+        albumArtist: file.albumArtist || parsedTags.albumArtist || '',
+        composer: file.composer || parsedTags.composer || '',
+        publisher: file.publisher || parsedTags.publisher || '',
+        bpm: file.bpm || parsedTags.bpm || '',
+        discNumber: file.discNumber || parsedTags.discNumber || '',
+        comment: file.comment || parsedTags.comment || ''
       },
       coverArt: coverArtBase64
     });
@@ -1296,7 +1308,10 @@ app.get('/api/files/:id/metadata', async (req, res) => {
 // Update tags of a file and DB record, sync to git
 app.post('/api/files/:id/tag', async (req, res) => {
   const { id } = req.params;
-  const { title, artist, album, year, genre, trackNumber, coverArtUrl } = req.body;
+  const { 
+    title, artist, album, year, genre, trackNumber, coverArtUrl,
+    albumArtist, composer, publisher, bpm, discNumber, comment
+  } = req.body;
 
   try {
     const file = db.getFile(id);
@@ -1319,6 +1334,14 @@ app.post('/api/files/:id/tag', async (req, res) => {
         year: year ? String(year) : undefined,
         genre: genre ? String(genre) : undefined,
         trackNumber: trackNumber ? String(trackNumber) : undefined,
+        performerInfo: albumArtist || '', // Band/Album Artist
+        TPE2: albumArtist || '',          // Album Artist raw frame
+        composer: composer || '',
+        publisher: publisher || '',
+        TPUB: publisher || '',            // Publisher raw frame
+        bpm: bpm ? String(bpm) : undefined,
+        partOfSet: discNumber ? String(discNumber) : undefined,
+        comment: comment ? { language: 'eng', text: String(comment) } : undefined
       };
 
       let existingTags = {};
@@ -1406,6 +1429,12 @@ app.post('/api/files/:id/tag', async (req, res) => {
     file.year = year || '';
     file.genre = genre || '';
     file.trackNumber = trackNumber || '';
+    file.albumArtist = albumArtist || '';
+    file.composer = composer || '';
+    file.publisher = publisher || '';
+    file.bpm = bpm || '';
+    file.discNumber = discNumber || '';
+    file.comment = comment || '';
 
     db.saveFile(file);
 

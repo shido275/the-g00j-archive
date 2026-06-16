@@ -1573,8 +1573,8 @@ body {
   display: flex;
   gap: 32px;
   overflow: hidden;
-  height: 58vh;
-  padding: 8px 4px;
+  height: 64vh;
+  padding: 16px 24px;
 }
 
 .ytm-tagger-column {
@@ -1588,6 +1588,21 @@ body {
 .ytm-tagger-column.mb-panel {
   border-left: 1px solid rgba(255, 255, 255, 0.05);
   padding-left: 32px;
+}
+
+@media (max-width: 768px) {
+  .ytm-tagger-layout {
+    flex-direction: column;
+    height: 70vh;
+    overflow-y: auto;
+  }
+  .ytm-tagger-column.mb-panel {
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    padding-left: 0;
+    padding-top: 24px;
+    margin-top: 24px;
+  }
 }
 
 .ytm-tagger-section-title {

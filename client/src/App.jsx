@@ -90,6 +90,12 @@ function App() {
     year: '',
     genre: '',
     trackNumber: '',
+    albumArtist: '',
+    composer: '',
+    publisher: '',
+    bpm: '',
+    discNumber: '',
+    comment: '',
     coverArtUrl: ''
   });
   const [taggerCoverArt, setTaggerCoverArt] = useState(null); // base64 current
@@ -114,6 +120,12 @@ function App() {
       year: '',
       genre: '',
       trackNumber: '',
+      albumArtist: '',
+      composer: '',
+      publisher: '',
+      bpm: '',
+      discNumber: '',
+      comment: '',
       coverArtUrl: ''
     });
     setTaggerCoverArt(null);
@@ -136,6 +148,12 @@ function App() {
           year: data.tags.year || '',
           genre: data.tags.genre || '',
           trackNumber: data.tags.trackNumber || '',
+          albumArtist: data.tags.albumArtist || '',
+          composer: data.tags.composer || '',
+          publisher: data.tags.publisher || '',
+          bpm: data.tags.bpm || '',
+          discNumber: data.tags.discNumber || '',
+          comment: data.tags.comment || '',
           coverArtUrl: ''
         });
         setTaggerCoverArt(data.coverArt);
@@ -194,7 +212,8 @@ function App() {
       artist: selectedMbMatch.artist || prev.artist,
       album: release.title || prev.album,
       year: release.date ? release.date.substring(0, 4) : prev.year,
-      coverArtUrl: mbCoverUrl || prev.coverArtUrl
+      coverArtUrl: mbCoverUrl || prev.coverArtUrl,
+      albumArtist: selectedMbMatch.artist || prev.albumArtist
     }));
   };
 
@@ -1790,6 +1809,17 @@ function App() {
                       </div>
 
                       <div className="ytm-tagger-row">
+                        <label className="ytm-tagger-label">Album Artist</label>
+                        <input 
+                          type="text" 
+                          className="ytm-tagger-input"
+                          value={taggerTags.albumArtist}
+                          onChange={(e) => setTaggerTags(prev => ({ ...prev, albumArtist: e.target.value }))}
+                          placeholder="e.g. The Weeknd"
+                        />
+                      </div>
+
+                      <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Album</label>
                         <input 
                           type="text" 
@@ -1797,6 +1827,28 @@ function App() {
                           value={taggerTags.album}
                           onChange={(e) => setTaggerTags(prev => ({ ...prev, album: e.target.value }))}
                           placeholder="e.g. After Hours"
+                        />
+                      </div>
+
+                      <div className="ytm-tagger-row">
+                        <label className="ytm-tagger-label">Composer</label>
+                        <input 
+                          type="text" 
+                          className="ytm-tagger-input"
+                          value={taggerTags.composer}
+                          onChange={(e) => setTaggerTags(prev => ({ ...prev, composer: e.target.value }))}
+                          placeholder="e.g. Max Martin"
+                        />
+                      </div>
+
+                      <div className="ytm-tagger-row">
+                        <label className="ytm-tagger-label">Publisher</label>
+                        <input 
+                          type="text" 
+                          className="ytm-tagger-input"
+                          value={taggerTags.publisher}
+                          onChange={(e) => setTaggerTags(prev => ({ ...prev, publisher: e.target.value }))}
+                          placeholder="e.g. Republic Records"
                         />
                       </div>
 
@@ -1823,6 +1875,29 @@ function App() {
                         </div>
                       </div>
 
+                      <div style={{ display: 'flex', gap: '12px' }}>
+                        <div className="ytm-tagger-row" style={{ flex: 1 }}>
+                          <label className="ytm-tagger-label">Disc #</label>
+                          <input 
+                            type="text" 
+                            className="ytm-tagger-input"
+                            value={taggerTags.discNumber}
+                            onChange={(e) => setTaggerTags(prev => ({ ...prev, discNumber: e.target.value }))}
+                            placeholder="e.g. 1"
+                          />
+                        </div>
+                        <div className="ytm-tagger-row" style={{ flex: 1 }}>
+                          <label className="ytm-tagger-label">BPM</label>
+                          <input 
+                            type="text" 
+                            className="ytm-tagger-input"
+                            value={taggerTags.bpm}
+                            onChange={(e) => setTaggerTags(prev => ({ ...prev, bpm: e.target.value }))}
+                            placeholder="e.g. 120"
+                          />
+                        </div>
+                      </div>
+
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Genre</label>
                         <input 
@@ -1831,6 +1906,17 @@ function App() {
                           value={taggerTags.genre}
                           onChange={(e) => setTaggerTags(prev => ({ ...prev, genre: e.target.value }))}
                           placeholder="e.g. Pop"
+                        />
+                      </div>
+
+                      <div className="ytm-tagger-row">
+                        <label className="ytm-tagger-label">Comment</label>
+                        <textarea 
+                          className="ytm-tagger-input"
+                          style={{ resize: 'vertical', minHeight: '60px', fontFamily: 'inherit' }}
+                          value={taggerTags.comment}
+                          onChange={(e) => setTaggerTags(prev => ({ ...prev, comment: e.target.value }))}
+                          placeholder="Add comment..."
                         />
                       </div>
 
