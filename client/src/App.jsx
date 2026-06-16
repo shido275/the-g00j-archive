@@ -27,7 +27,10 @@ import {
   Volume2,
   VolumeX,
   Repeat,
-  Shuffle
+  Shuffle,
+  ChevronUp,
+  ChevronDown,
+  ListMusic
 } from 'lucide-react';
 import { ChunkUploader } from './utils/chunkUploader';
 
@@ -70,6 +73,50 @@ function App() {
   const [isShuffled, setIsShuffled] = useState(false);
   const [audioQueue, setAudioQueue] = useState([]);
   const audioRef = useRef(null);
+
+  // Expandable player, lyrics & queue states
+  const [isPlayerExpanded, setIsPlayerExpanded] = useState(false);
+  const [activePlayerTab, setActivePlayerTab] = useState('queue'); // queue or lyrics
+  const [lyricsText, setLyricsText] = useState('');
+  const [loadingLyrics, setLoadingLyrics] = useState(false);
+
+  const fetchLyrics = async (trackName) => {
+    setLoadingLyrics(true);
+    setLyricsText('Searching for lyrics...');
+    try {
+      // Clean track name of extension
+      const query = trackName.replace(/\.[^/.]+$/, "").trim();
+      const response = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(query)}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.length > 0) {
+          const match = data.find(item => item.plainLyrics) || data[0];
+          if (match && match.plainLyrics) {
+            setLyricsText(match.plainLyrics);
+          } else if (match && match.instrumental) {
+            setLyricsText('Instrumental Track (No lyrics)');
+          } else {
+            setLyricsText('Lyrics not found for this track.');
+          }
+        } else {
+          setLyricsText('Lyrics not found on LRCLIB.');
+        }
+      } else {
+        setLyricsText('Failed to retrieve lyrics from database.');
+      }
+    } catch (err) {
+      console.error(err);
+      setLyricsText('Could not connect to lyrics service.');
+    } finally {
+      setLoadingLyrics(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeAudioTrack) {
+      fetchLyrics(activeAudioTrack.originalName);
+    }
+  }, [activeAudioTrack]);
 
   const formatTime = (secs) => {
     if (isNaN(secs) || secs === Infinity) return '0:00';
@@ -1484,7 +1531,7 @@ function App() {
           />
 
           {/* Left Track Info */}
-          <div className="ytm-track-info">
+          <div className="ytm-track-info" onClick={() => setIsPlayerExpanded(true)} style={{ cursor: 'pointer' }}>
             <div className={`ytm-cover-art ${isPlaying ? 'playing' : ''}`}>
               <Music size={20} />
             </div>
@@ -1558,6 +1605,16 @@ function App() {
               />
             </div>
 
+            {/* Expand Player */}
+            <button 
+              className="ytm-extra-btn" 
+              onClick={() => setIsPlayerExpanded(true)} 
+              title="Expand Player"
+              style={{ opacity: 0.7 }}
+            >
+              <ChevronUp size={16} />
+            </button>
+
             {/* Close/Close Player */}
             <button 
               className="ytm-extra-btn" 
@@ -1571,6 +1628,176 @@ function App() {
             >
               <X size={16} />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Expandable Full-Screen Overlay Player */}
+      {isPlayerExpanded && activeAudioTrack && (
+        <div className="ytm-expanded-overlay">
+          <header className="ytm-expanded-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              <Music size={14} />
+              <span>Now Playing</span>
+            </div>
+            <button 
+              className="ytm-extra-btn" 
+              onClick={() => setIsPlayerExpanded(false)} 
+              title="Minimize Player"
+              style={{ opacity: 0.8, background: 'rgba(255,255,255,0.05)', padding: '6px' }}
+            >
+              <ChevronDown size={20} />
+            </button>
+          </header>
+
+          <div className="ytm-expanded-body">
+            {/* Left Column: Visualizer cover, titles, and slider controls */}
+            <div className="ytm-expanded-left">
+              <div className={`ytm-expanded-cover-wrapper ${isPlaying ? 'playing' : 'paused'}`}>
+                <div className="ytm-expanded-cover-icon">
+                  <Music size={64} />
+                </div>
+              </div>
+              
+              <div className="ytm-expanded-meta">
+                <span className="ytm-expanded-title" title={activeAudioTrack.originalName}>
+                  {activeAudioTrack.originalName}
+                </span>
+                <span className="ytm-expanded-artist">
+                  {formatBytes(activeAudioTrack.size)} • G00J Archives
+                </span>
+              </div>
+
+              <div className="ytm-expanded-controls-box">
+                {/* Seek Bar */}
+                <div className="ytm-progress-bar-wrapper">
+                  <span className="ytm-time-text">{formatTime(currentTime)}</span>
+                  <input
+                    type="range"
+                    className="ytm-progress-slider"
+                    min={0}
+                    max={duration || 100}
+                    value={currentTime}
+                    onChange={handleSeek}
+                  />
+                  <span className="ytm-time-text">{formatTime(duration)}</span>
+                </div>
+
+                {/* Core Controls */}
+                <div className="ytm-controls" style={{ marginTop: '8px' }}>
+                  <button 
+                    className={`ytm-extra-btn ${isShuffled ? 'active' : ''}`} 
+                    onClick={() => setIsShuffled(!isShuffled)} 
+                    title="Shuffle"
+                    style={{ marginRight: '16px' }}
+                  >
+                    <Shuffle size={18} />
+                  </button>
+                  
+                  <button className="ytm-control-btn" onClick={playPrev} title="Previous Track" style={{ padding: '10px' }}>
+                    <SkipBack size={20} fill="currentColor" />
+                  </button>
+                  
+                  <button className="ytm-control-btn play-pause" onClick={togglePlay} title={isPlaying ? "Pause" : "Play"} style={{ width: '48px', height: '48px' }}>
+                    {isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" style={{ marginLeft: '4px' }} />}
+                  </button>
+                  
+                  <button className="ytm-control-btn" onClick={playNext} title="Next Track" style={{ padding: '10px' }}>
+                    <SkipForward size={20} fill="currentColor" />
+                  </button>
+                  
+                  <button 
+                    className={`ytm-extra-btn ${isLooping ? 'active' : ''}`} 
+                    onClick={() => setIsLooping(!isLooping)} 
+                    title="Repeat"
+                    style={{ marginLeft: '16px' }}
+                  >
+                    <Repeat size={18} />
+                  </button>
+                </div>
+
+                {/* Volume Control */}
+                <div className="ytm-volume-container" style={{ marginTop: '16px', gap: '12px' }}>
+                  <button className="ytm-extra-btn" onClick={toggleMute} title={isMuted ? "Unmute" : "Mute"}>
+                    {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                  </button>
+                  <input
+                    type="range"
+                    className="ytm-volume-slider"
+                    style={{ width: '150px' }}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={isMuted ? 0 : volume}
+                    onChange={handleVolumeChange}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column: Tab Switching (Up Next vs Lyrics) */}
+            <div className="ytm-expanded-right">
+              <div className="ytm-tabs-header">
+                <button 
+                  className={`ytm-tab-btn ${activePlayerTab === 'queue' ? 'active' : ''}`} 
+                  onClick={() => setActivePlayerTab('queue')}
+                >
+                  Up Next
+                </button>
+                <button 
+                  className={`ytm-tab-btn ${activePlayerTab === 'lyrics' ? 'active' : ''}`} 
+                  onClick={() => setActivePlayerTab('lyrics')}
+                >
+                  Lyrics
+                </button>
+              </div>
+
+              <div className="ytm-tab-content">
+                {activePlayerTab === 'queue' ? (
+                  <div className="ytm-queue-list">
+                    {audioQueue.map((track, idx) => {
+                      const isActive = track.id === activeAudioTrack.id;
+                      return (
+                        <div 
+                          key={track.id} 
+                          className={`ytm-queue-item ${isActive ? 'active' : ''}`}
+                          onClick={() => playTrack(track)}
+                        >
+                          <div className="ytm-queue-track-meta">
+                            <span className={`ytm-queue-track-title ${isActive ? 'active' : ''}`} title={track.originalName}>
+                              {idx + 1}. {track.originalName}
+                            </span>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textAlign: 'left' }}>
+                              {formatBytes(track.size)}
+                            </span>
+                          </div>
+                          {isActive && (
+                            <div className={`ytm-equalizer ${isPlaying ? '' : 'paused'}`}>
+                              <div className="ytm-equalizer-bar"></div>
+                              <div className="ytm-equalizer-bar"></div>
+                              <div className="ytm-equalizer-bar"></div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="ytm-lyrics-container">
+                    {loadingLyrics ? (
+                      <div className="ytm-lyrics-box searching">
+                        <RefreshCw className="spin" style={{ animation: 'spin 1.5s linear infinite', margin: '0 auto 12px auto' }} size={24} />
+                        <span>Searching for lyrics on LRCLIB...</span>
+                      </div>
+                    ) : (
+                      <div className="ytm-lyrics-box">
+                        {lyricsText}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
