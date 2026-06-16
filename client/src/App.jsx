@@ -584,7 +584,7 @@ function App() {
         <div className="storage-gauge-container">
           <div className="storage-header">
             <span className="storage-title">Storage Used</span>
-            <span className="storage-val">{formatBytes(totalUsedStorage, 1)}</span>
+            <span className="storage-val">{formatBytes(totalUsedStorage, 1)} / ∞</span>
           </div>
           <div className="storage-bar-bg" style={{ height: '3px' }}>
             <div 
