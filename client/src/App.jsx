@@ -21,7 +21,13 @@ import {
   RefreshCw, 
   AlertCircle,
   FolderOpen,
-  Info
+  Info,
+  SkipForward,
+  SkipBack,
+  Volume2,
+  VolumeX,
+  Repeat,
+  Shuffle
 } from 'lucide-react';
 import { ChunkUploader } from './utils/chunkUploader';
 
@@ -52,6 +58,127 @@ function App() {
   const [downloadingUrls, setDownloadingUrls] = useState({});
   const [folders, setFolders] = useState([]);
   const [allFolders, setAllFolders] = useState([]);
+
+  // YouTube Music style persistent audio states
+  const [activeAudioTrack, setActiveAudioTrack] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isLooping, setIsLooping] = useState(false);
+  const [isShuffled, setIsShuffled] = useState(false);
+  const [audioQueue, setAudioQueue] = useState([]);
+  const audioRef = useRef(null);
+
+  const formatTime = (secs) => {
+    if (isNaN(secs) || secs === Infinity) return '0:00';
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
+  const playTrack = (track) => {
+    // Build active audio files queue
+    const audioTracks = files.filter(f => f.category === 'audio');
+    setAudioQueue(audioTracks);
+    setActiveAudioTrack(track);
+    setIsPlaying(true);
+    setCurrentTime(0);
+
+    if (audioRef.current) {
+      audioRef.current.src = `${API_BASE}/api/files/download/${track.id}`;
+      audioRef.current.load();
+      audioRef.current.play().catch(err => console.log('Autoplay blocked:', err));
+    }
+  };
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      audioRef.current.play().catch(err => console.log(err));
+      setIsPlaying(true);
+    }
+  };
+
+  const playNext = () => {
+    if (audioQueue.length <= 1) {
+      if (isLooping && audioRef.current) {
+        audioRef.current.currentTime = 0;
+        audioRef.current.play();
+      }
+      return;
+    }
+
+    let nextIndex = 0;
+    if (isShuffled) {
+      nextIndex = Math.floor(Math.random() * audioQueue.length);
+      const curIdx = audioQueue.findIndex(t => t.id === activeAudioTrack.id);
+      if (nextIndex === curIdx && audioQueue.length > 1) {
+        nextIndex = (nextIndex + 1) % audioQueue.length;
+      }
+    } else {
+      const curIdx = audioQueue.findIndex(t => t.id === activeAudioTrack.id);
+      nextIndex = (curIdx + 1) % audioQueue.length;
+    }
+
+    const nextTrack = audioQueue[nextIndex];
+    if (nextTrack) {
+      setActiveAudioTrack(nextTrack);
+      if (audioRef.current) {
+        audioRef.current.src = `${API_BASE}/api/files/download/${nextTrack.id}`;
+        audioRef.current.load();
+        audioRef.current.play().catch(err => console.log(err));
+        setIsPlaying(true);
+      }
+    }
+  };
+
+  const playPrev = () => {
+    if (audioQueue.length <= 1) return;
+    const curIdx = audioQueue.findIndex(t => t.id === activeAudioTrack.id);
+    let prevIndex = curIdx - 1;
+    if (prevIndex < 0) prevIndex = audioQueue.length - 1;
+
+    const prevTrack = audioQueue[prevIndex];
+    if (prevTrack) {
+      setActiveAudioTrack(prevTrack);
+      if (audioRef.current) {
+        audioRef.current.src = `${API_BASE}/api/files/download/${prevTrack.id}`;
+        audioRef.current.load();
+        audioRef.current.play().catch(err => console.log(err));
+        setIsPlaying(true);
+      }
+    }
+  };
+
+  const handleVolumeChange = (e) => {
+    const val = parseFloat(e.target.value);
+    setVolume(val);
+    setIsMuted(val === 0);
+    if (audioRef.current) {
+      audioRef.current.volume = val;
+      audioRef.current.muted = val === 0;
+    }
+  };
+
+  const toggleMute = () => {
+    if (!audioRef.current) return;
+    const targetMuted = !isMuted;
+    setIsMuted(targetMuted);
+    audioRef.current.muted = targetMuted;
+  };
+
+  const handleSeek = (e) => {
+    const newTime = parseFloat(e.target.value);
+    setCurrentTime(newTime);
+    if (audioRef.current) {
+      audioRef.current.currentTime = newTime;
+    }
+  };
 
   // Advanced scraper schedule states
   const [scraperJobs, setScraperJobs] = useState([]);
@@ -601,7 +728,7 @@ function App() {
       </aside>
 
       {/* Main Panel */}
-      <main className="main-content">
+      <main className={`main-content ${activeAudioTrack ? 'ytm-player-bar-offset' : ''}`}>
         <header className="top-header glass-panel">
           <div className="search-wrapper">
             <Search size={18} className="search-icon" />
@@ -780,7 +907,7 @@ function App() {
                 <div 
                   key={file.id} 
                   className="file-card glass-card"
-                  onClick={() => setPreviewFile(file)}
+                  onClick={() => file.category === 'audio' ? playTrack(file) : setPreviewFile(file)}
                   style={{ cursor: 'pointer' }}
                 >
                   <div className="file-card-preview">
@@ -798,7 +925,16 @@ function App() {
                     )}
                   </div>
                   <div className="file-card-info">
-                    <span className="file-name" title={file.originalName}>{file.originalName}</span>
+                    <span className="file-name" title={file.originalName}>
+                      {file.originalName}
+                      {activeAudioTrack?.id === file.id && (
+                        <div className={`ytm-equalizer ${isPlaying ? '' : 'paused'}`}>
+                          <div className="ytm-equalizer-bar"></div>
+                          <div className="ytm-equalizer-bar"></div>
+                          <div className="ytm-equalizer-bar"></div>
+                        </div>
+                      )}
+                    </span>
                     <div className="file-meta">
                       <span>{formatBytes(file.size)}</span>
                       <span>{new Date(file.uploadDate).toLocaleDateString()}</span>
@@ -807,7 +943,7 @@ function App() {
                   <div className="file-card-actions">
                     <button 
                       className="file-action-btn"
-                      onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}
+                      onClick={(e) => { e.stopPropagation(); file.category === 'audio' ? playTrack(file) : setPreviewFile(file); }}
                       title="Preview File"
                     >
                       <Eye size={14} />
@@ -882,7 +1018,7 @@ function App() {
                     <tr 
                       key={file.id} 
                       className="files-list-row"
-                      onClick={() => setPreviewFile(file)}
+                      onClick={() => file.category === 'audio' ? playTrack(file) : setPreviewFile(file)}
                       style={{ cursor: 'pointer' }}
                     >
                       <td>
@@ -892,6 +1028,13 @@ function App() {
                           </div>
                           <span className="list-file-name-text" title={file.originalName}>
                             {file.originalName}
+                            {activeAudioTrack?.id === file.id && (
+                              <div className={`ytm-equalizer ${isPlaying ? '' : 'paused'}`}>
+                                <div className="ytm-equalizer-bar"></div>
+                                <div className="ytm-equalizer-bar"></div>
+                                <div className="ytm-equalizer-bar"></div>
+                              </div>
+                            )}
                           </span>
                         </div>
                       </td>
@@ -901,7 +1044,7 @@ function App() {
                         <div className="list-actions-cell" onClick={(e) => e.stopPropagation()}>
                           <button 
                             className="file-action-btn"
-                            onClick={() => setPreviewFile(file)}
+                            onClick={() => file.category === 'audio' ? playTrack(file) : setPreviewFile(file)}
                             title="Preview File"
                           >
                             <Eye size={14} />
@@ -1327,6 +1470,110 @@ function App() {
           </div>
         )}
       </main>
+
+      {/* Persistent Bottom YouTube Music Player Bar */}
+      {activeAudioTrack && (
+        <div className="ytm-player-bar">
+          {/* Hidden native audio control tag */}
+          <audio
+            ref={audioRef}
+            onTimeUpdate={() => setCurrentTime(audioRef.current ? audioRef.current.currentTime : 0)}
+            onLoadedMetadata={() => setDuration(audioRef.current ? audioRef.current.duration : 0)}
+            onEnded={playNext}
+            loop={isLooping}
+          />
+
+          {/* Left Track Info */}
+          <div className="ytm-track-info">
+            <div className={`ytm-cover-art ${isPlaying ? 'playing' : ''}`}>
+              <Music size={20} />
+            </div>
+            <div className="ytm-track-meta">
+              <span className="ytm-track-title" title={activeAudioTrack.originalName}>
+                {activeAudioTrack.originalName}
+              </span>
+              <span className="ytm-track-desc">
+                {formatBytes(activeAudioTrack.size)} • Audio
+              </span>
+            </div>
+          </div>
+
+          {/* Middle Controls & Seek Slider */}
+          <div className="ytm-player-controls-container">
+            <div className="ytm-controls">
+              <button className="ytm-control-btn" onClick={playPrev} title="Previous Track">
+                <SkipBack size={18} fill="currentColor" />
+              </button>
+              <button className="ytm-control-btn play-pause" onClick={togglePlay} title={isPlaying ? "Pause" : "Play"}>
+                {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" style={{ marginLeft: '2px' }} />}
+              </button>
+              <button className="ytm-control-btn" onClick={playNext} title="Next Track">
+                <SkipForward size={18} fill="currentColor" />
+              </button>
+            </div>
+            
+            <div className="ytm-progress-bar-wrapper">
+              <span className="ytm-time-text">{formatTime(currentTime)}</span>
+              <input
+                type="range"
+                className="ytm-progress-slider"
+                min={0}
+                max={duration || 100}
+                value={currentTime}
+                onChange={handleSeek}
+              />
+              <span className="ytm-time-text">{formatTime(duration)}</span>
+            </div>
+          </div>
+
+          {/* Right Extra Actions (loop, shuffle, volume) */}
+          <div className="ytm-extra-controls">
+            <button 
+              className={`ytm-extra-btn ${isLooping ? 'active' : ''}`} 
+              onClick={() => setIsLooping(!isLooping)} 
+              title={isLooping ? "Repeat: On" : "Repeat: Off"}
+            >
+              <Repeat size={16} />
+            </button>
+            <button 
+              className={`ytm-extra-btn ${isShuffled ? 'active' : ''}`} 
+              onClick={() => setIsShuffled(!isShuffled)} 
+              title={isShuffled ? "Shuffle: On" : "Shuffle: Off"}
+            >
+              <Shuffle size={16} />
+            </button>
+
+            <div className="ytm-volume-container">
+              <button className="ytm-extra-btn" onClick={toggleMute} title={isMuted ? "Unmute" : "Mute"}>
+                {isMuted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+              </button>
+              <input
+                type="range"
+                className="ytm-volume-slider"
+                min={0}
+                max={1}
+                step={0.05}
+                value={isMuted ? 0 : volume}
+                onChange={handleVolumeChange}
+              />
+            </div>
+
+            {/* Close/Close Player */}
+            <button 
+              className="ytm-extra-btn" 
+              onClick={() => {
+                if (audioRef.current) audioRef.current.pause();
+                setIsPlaying(false);
+                setActiveAudioTrack(null);
+              }} 
+              title="Close Player"
+              style={{ marginLeft: '8px', opacity: 0.7 }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
