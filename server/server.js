@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import mime from 'mime-types';
 import NodeID3 from 'node-id3';
 import * as mm from 'music-metadata';
+import AdmZip from 'adm-zip';
 import { db } from './db.js';
 import { gitSync, getFolderHierarchyPath } from './gitSync.js';
 
@@ -1445,6 +1446,71 @@ app.post('/api/files/:id/tag', async (req, res) => {
   } catch (error) {
     console.error('Write tags error:', error);
     res.status(500).json({ error: `Failed to write tags to file: ${error.message}` });
+  }
+});
+
+// Generate distribution ZIP package (audio, cover art, metadata report)
+app.get('/api/files/:id/distribute', async (req, res) => {
+  try {
+    const file = db.getFile(req.params.id);
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    const filePath = getGitFilePath(file);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Physical file not found on disk' });
+    }
+
+    const zip = new AdmZip();
+
+    // Add audio file
+    zip.addLocalFile(filePath, '', file.originalName);
+
+    // Extract cover art if any
+    let picBuffer = null;
+    let picMime = 'image/jpeg';
+    try {
+      const mmData = await mm.parseFile(filePath);
+      if (mmData && mmData.common && mmData.common.picture && mmData.common.picture.length > 0) {
+        picBuffer = mmData.common.picture[0].data;
+        picMime = mmData.common.picture[0].format || 'image/jpeg';
+      }
+    } catch (err) {
+      console.warn('Could not extract cover art for distribution zip:', err.message);
+    }
+
+    if (picBuffer) {
+      const ext = picMime.includes('png') ? 'png' : 'jpg';
+      zip.addFile(`cover.${ext}`, picBuffer);
+    }
+
+    // Add metadata report
+    const metadataText = `G00J ARCHIVES - MUSIC DISTRIBUTION REPORT
+==================================================
+File Name: ${file.originalName}
+Title: ${file.title || ''}
+Artist: ${file.artist || ''}
+Album Artist: ${file.albumArtist || ''}
+Album: ${file.album || ''}
+Composer: ${file.composer || ''}
+Publisher: ${file.publisher || ''}
+Year: ${file.year || ''}
+Genre: ${file.genre || ''}
+Track Number: ${file.trackNumber || ''}
+Disc Number: ${file.discNumber || ''}
+BPM: ${file.bpm || ''}
+Comment: ${file.comment || ''}
+Generated On: ${new Date().toISOString()}
+`;
+    zip.addFile('metadata-release.txt', Buffer.from(metadataText, 'utf-8'));
+
+    const zipBuffer = zip.toBuffer();
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.originalName.replace(/\.[^/.]+$/, "")}-release-package.zip"`);
+    res.send(zipBuffer);
+  } catch (error) {
+    console.error('Distribute package error:', error);
+    res.status(500).json({ error: `Failed to compile distribution package: ${error.message}` });
   }
 });
 

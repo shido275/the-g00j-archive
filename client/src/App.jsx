@@ -31,7 +31,8 @@ import {
   ChevronUp,
   ChevronDown,
   ListMusic,
-  Tag
+  Tag,
+  Radio
 } from 'lucide-react';
 import { ChunkUploader } from './utils/chunkUploader';
 
@@ -110,6 +111,30 @@ function App() {
   const [showArchivesPicker, setShowArchivesPicker] = useState(false);
   const [archivesImages, setArchivesImages] = useState([]);
   const [loadingArchivesImages, setLoadingArchivesImages] = useState(false);
+
+  // Distribution states
+  const [showDistributeModal, setShowDistributeModal] = useState(false);
+  const [distributeFile, setDistributeFile] = useState(null);
+  const [distributeTags, setDistributeTags] = useState(null);
+  const [loadingDistributeData, setLoadingDistributeData] = useState(false);
+
+  const openDistribute = async (file) => {
+    setDistributeFile(file);
+    setDistributeTags(null);
+    setShowDistributeModal(true);
+    setLoadingDistributeData(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/files/${file.id}/metadata`);
+      if (response.ok) {
+        const data = await response.json();
+        setDistributeTags(data.tags);
+      }
+    } catch (err) {
+      console.error('Failed to fetch metadata for distribution:', err);
+    } finally {
+      setLoadingDistributeData(false);
+    }
+  };
 
   const openTagger = async (file) => {
     setTaggerFile(file);
@@ -1218,14 +1243,24 @@ function App() {
                       <Eye size={14} />
                     </button>
                     {file.category === 'audio' && (
-                      <button 
-                        className="file-action-btn"
-                        onClick={(e) => { e.stopPropagation(); openTagger(file); }}
-                        title="Edit Tags / Tagger"
-                        style={{ color: 'var(--accent-indigo)' }}
-                      >
-                        <Tag size={14} />
-                      </button>
+                      <>
+                        <button 
+                          className="file-action-btn"
+                          onClick={(e) => { e.stopPropagation(); openTagger(file); }}
+                          title="Edit Tags / Tagger"
+                          style={{ color: 'var(--accent-indigo)' }}
+                        >
+                          <Tag size={14} />
+                        </button>
+                        <button 
+                          className="file-action-btn"
+                          onClick={(e) => { e.stopPropagation(); openDistribute(file); }}
+                          title="Release / Distribute Music"
+                          style={{ color: 'var(--accent-indigo)' }}
+                        >
+                          <Radio size={14} />
+                        </button>
+                      </>
                     )}
                     <button 
                       className="file-action-btn"
@@ -1329,14 +1364,24 @@ function App() {
                             <Eye size={14} />
                           </button>
                           {file.category === 'audio' && (
-                            <button 
-                              className="file-action-btn"
-                              onClick={() => openTagger(file)}
-                              title="Edit Tags / Tagger"
-                              style={{ color: 'var(--accent-indigo)' }}
-                            >
-                              <Tag size={14} />
-                            </button>
+                            <>
+                              <button 
+                                className="file-action-btn"
+                                onClick={() => openTagger(file)}
+                                title="Edit Tags / Tagger"
+                                style={{ color: 'var(--accent-indigo)' }}
+                              >
+                                <Tag size={14} />
+                              </button>
+                              <button 
+                                className="file-action-btn"
+                                onClick={() => openDistribute(file)}
+                                title="Release / Distribute Music"
+                                style={{ color: 'var(--accent-indigo)' }}
+                              >
+                                <Radio size={14} />
+                              </button>
+                            </>
                           )}
                           <button 
                             className="file-action-btn"
@@ -2180,6 +2225,160 @@ function App() {
 
               <footer className="modal-footer">
                 <button className="modal-btn" onClick={() => setShowArchivesPicker(false)}>
+                  Close
+                </button>
+              </footer>
+            </div>
+          </div>
+        )}
+
+        {/* Music Distribution Modal Overlay */}
+        {showDistributeModal && distributeFile && (
+          <div className="modal-overlay" style={{ zIndex: 1200 }} onClick={() => setShowDistributeModal(false)}>
+            <div className="modal-container glass-panel" style={{ maxWidth: '850px', width: '90%' }} onClick={(e) => e.stopPropagation()}>
+              <header className="modal-header">
+                <span className="modal-title-text" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Radio size={18} style={{ color: 'var(--accent-indigo)' }} />
+                  Music Distribution Hub
+                </span>
+                <button className="modal-close-btn" onClick={() => setShowDistributeModal(false)}>
+                  <X size={18} />
+                </button>
+              </header>
+
+              {loadingDistributeData ? (
+                <div className="empty-state" style={{ padding: '60px' }}>
+                  <RefreshCw className="empty-icon spin" style={{ animation: 'spin 1.5s linear infinite' }} size={36} />
+                  <p>Reading metadata for distribution...</p>
+                </div>
+              ) : (
+                <div className="ytm-tagger-layout" style={{ height: '55vh' }}>
+                  {/* Left Column: Metadata Details */}
+                  <div className="ytm-tagger-column" style={{ borderRight: '1px solid rgba(255, 255, 255, 0.05)', paddingRight: '20px' }}>
+                    <h3 className="ytm-tagger-section-title">Release Metadata</h3>
+                    
+                    <div className="ytm-tagger-form" style={{ gap: '10px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', background: 'rgba(255,255,255,0.02)', padding: '10px', borderRadius: '6px', border: '1px solid var(--glass-border)' }}>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase' }}>File name</span>
+                        <span style={{ fontSize: '0.85rem', color: '#fff', wordBreak: 'break-all' }}>{distributeFile.originalName}</span>
+                      </div>
+
+                      {[
+                        { label: 'Title', value: distributeTags?.title || distributeFile.originalName },
+                        { label: 'Artist', value: distributeTags?.artist || 'Unknown Artist' },
+                        { label: 'Album Artist', value: distributeTags?.albumArtist || distributeTags?.artist || 'Unknown Artist' },
+                        { label: 'Album', value: distributeTags?.album || 'Single' },
+                        { label: 'Composer', value: distributeTags?.composer || 'N/A' },
+                        { label: 'Publisher', value: distributeTags?.publisher || 'N/A' },
+                        { label: 'Genre', value: distributeTags?.genre || 'N/A' },
+                        { label: 'Year', value: distributeTags?.year || 'N/A' },
+                        { label: 'Track #', value: distributeTags?.trackNumber || 'N/A' },
+                        { label: 'Disc #', value: distributeTags?.discNumber || 'N/A' },
+                        { label: 'BPM', value: distributeTags?.bpm || 'N/A' },
+                        { label: 'Comment', value: distributeTags?.comment || 'N/A' }
+                      ].map(item => (
+                        <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: '0.8rem' }}>
+                          <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{item.label}</span>
+                          <span style={{ color: '#fff', textAlign: 'right', maxWidth: '70%', wordBreak: 'break-word' }}>{item.value}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button 
+                      className="glow-btn"
+                      style={{ marginTop: '16px', height: '36px', fontSize: '0.8rem' }}
+                      onClick={() => {
+                        const reportText = `DISTRIBUTION METADATA REPORT
+=============================
+File: ${distributeFile.originalName}
+Title: ${distributeTags?.title || ''}
+Artist: ${distributeTags?.artist || ''}
+Album Artist: ${distributeTags?.albumArtist || ''}
+Album: ${distributeTags?.album || ''}
+Composer: ${distributeTags?.composer || ''}
+Publisher: ${distributeTags?.publisher || ''}
+Year: ${distributeTags?.year || ''}
+Genre: ${distributeTags?.genre || ''}
+Track Number: ${distributeTags?.trackNumber || ''}
+Disc Number: ${distributeTags?.discNumber || ''}
+BPM: ${distributeTags?.bpm || ''}
+Comment: ${distributeTags?.comment || ''}
+`;
+                        navigator.clipboard.writeText(reportText);
+                        alert('Metadata copied to clipboard!');
+                      }}
+                    >
+                      Copy Release Metadata
+                    </button>
+                  </div>
+
+                  {/* Right Column: Distributors */}
+                  <div className="ytm-tagger-column" style={{ paddingLeft: '12px' }}>
+                    <h3 className="ytm-tagger-section-title">Select Music Distributor</h3>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {[
+                        { 
+                          name: 'Ditto Music', 
+                          desc: 'Unlimited distribution to Spotify, Apple Music, TikTok & more. Keep 100% of your royalties.',
+                          url: 'https://v2.dittomusic.com/login',
+                          color: 'var(--accent-indigo)'
+                        },
+                        { 
+                          name: 'Too Lost', 
+                          desc: 'Premium distribution, publishing administration, split sheets, and marketing tools.',
+                          url: 'https://dashboard.toolost.com/',
+                          color: '#00e575'
+                        },
+                        { 
+                          name: 'BandLab Distribution', 
+                          desc: 'Distribute directly from BandLab creator hub to all digital music stores and streaming services.',
+                          url: 'https://creator.bandlab.com/',
+                          color: '#ff3366'
+                        },
+                        { 
+                          name: 'UnitedMasters', 
+                          desc: 'Distribute your music, track analytics, and get brand/sync opportunities with NBA, ESPN, etc.',
+                          url: 'https://unitedmasters.com/login',
+                          color: '#fff'
+                        },
+                        { 
+                          name: 'TuneCore', 
+                          desc: 'One of the largest global music distributors. Distribute unlimited releases worldwide.',
+                          url: 'https://www.tunecore.com/dashboard',
+                          color: '#ffa500'
+                        }
+                      ].map(platform => (
+                        <div 
+                          key={platform.name} 
+                          className="glass-panel" 
+                          style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px', border: '1px solid var(--glass-border)', borderRadius: '8px', textAlign: 'left', background: 'rgba(255, 255, 255, 0.01)' }}
+                        >
+                          <div style={{ display: 'flex', justifyItems: 'center', justifyContent: 'space-between' }}>
+                            <span style={{ fontWeight: 700, color: platform.color, fontSize: '0.95rem' }}>{platform.name}</span>
+                          </div>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0, lineHeight: '1.4' }}>{platform.desc}</p>
+                          <button 
+                            className="glow-btn"
+                            style={{ margin: '8px 0 0 0', height: '34px', fontSize: '0.75rem', alignSelf: 'flex-start', background: 'rgba(255,255,255,0.03)' }}
+                            onClick={() => {
+                              // Trigger zip package generation download
+                              window.location.href = `${API_BASE}/api/files/${distributeFile.id}/distribute`;
+                              // Open portal console in a new tab
+                              window.open(platform.url, '_blank');
+                            }}
+                          >
+                            Distribute & Open Portal
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <footer className="modal-footer">
+                <button className="modal-btn" onClick={() => setShowDistributeModal(false)}>
                   Close
                 </button>
               </footer>
