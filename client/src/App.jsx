@@ -25,6 +25,10 @@ import {
 } from 'lucide-react';
 import { ChunkUploader } from './utils/chunkUploader';
 
+const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+  ? '' 
+  : 'http://localhost:5000';
+
 function App() {
   const [activeCategory, setActiveCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -63,7 +67,7 @@ function App() {
   const fetchFiles = async () => {
     setLoading(true);
     try {
-      const url = new URL('/api/files', window.location.origin);
+      const url = new URL(API_BASE + '/api/files', window.location.origin);
       if (activeCategory !== 'all') {
         url.searchParams.append('category', activeCategory);
       } else {
@@ -89,7 +93,7 @@ function App() {
 
   const fetchFolders = async () => {
     try {
-      const url = new URL('/api/folders', window.location.origin);
+      const url = new URL(API_BASE + '/api/folders', window.location.origin);
       if (currentFolderId) {
         url.searchParams.append('parentId', currentFolderId);
       } else {
@@ -102,7 +106,7 @@ function App() {
       }
 
       // Fetch all folders to compute breadcrumbs trail
-      const allUrl = new URL('/api/folders', window.location.origin);
+      const allUrl = new URL(API_BASE + '/api/folders', window.location.origin);
       allUrl.searchParams.append('all', 'true');
       const allResponse = await fetch(allUrl.toString());
       if (allResponse.ok) {
@@ -139,7 +143,7 @@ function App() {
 
     if (isText) {
       setTextContent('Loading content...');
-      fetch(`/api/files/download/${previewFile.id}`)
+      fetch(`${API_BASE}/api/files/download/${previewFile.id}`)
         .then(res => {
           if (!res.ok) throw new Error('Could not download file content');
           return res.text();
@@ -263,7 +267,7 @@ function App() {
     if (!folderName || !folderName.trim()) return;
 
     try {
-      const response = await fetch('/api/folders', {
+      const response = await fetch(`${API_BASE}/api/folders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -284,7 +288,7 @@ function App() {
     e.stopPropagation();
     if (window.confirm(`Are you sure you want to delete folder "${name}"? This will recursively delete all subfolders and physically delete all files inside it.`)) {
       try {
-        const response = await fetch(`/api/folders/${id}`, {
+        const response = await fetch(`${API_BASE}/api/folders/${id}`, {
           method: 'DELETE'
         });
         if (response.ok) {
@@ -317,7 +321,7 @@ function App() {
     setScraping(true);
     setScrapedResults([]);
     try {
-      const response = await fetch('/api/scrape', {
+      const response = await fetch(`${API_BASE}/api/scrape`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: scraperUrl.trim() })
@@ -343,7 +347,7 @@ function App() {
     const targetFolderId = scrapedFolderSelections[link.url] || currentFolderId;
     setDownloadingUrls(prev => ({ ...prev, [link.url]: 'downloading' }));
     try {
-      const response = await fetch('/api/scrape/download', {
+      const response = await fetch(`${API_BASE}/api/scrape/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -368,7 +372,7 @@ function App() {
 
   const fetchScraperJobs = async () => {
     try {
-      const response = await fetch('/api/scraper/jobs');
+      const response = await fetch(`${API_BASE}/api/scraper/jobs`);
       if (response.ok) {
         const data = await response.json();
         setScraperJobs(data);
@@ -385,7 +389,7 @@ function App() {
     }
 
     try {
-      const response = await fetch('/api/scraper/jobs', {
+      const response = await fetch(`${API_BASE}/api/scraper/jobs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -411,7 +415,7 @@ function App() {
   const handleDeleteJob = async (jobId) => {
     if (window.confirm('Are you sure you want to delete this scheduled scraping job?')) {
       try {
-        const response = await fetch(`/api/scraper/jobs/${jobId}`, {
+        const response = await fetch(`${API_BASE}/api/scraper/jobs/${jobId}`, {
           method: 'DELETE'
         });
         if (response.ok) {
@@ -446,7 +450,7 @@ function App() {
     e.stopPropagation();
     if (window.confirm('Are you sure you want to delete this file from the G00J Archives?')) {
       try {
-        const response = await fetch(`/api/files/${id}`, { method: 'DELETE' });
+        const response = await fetch(`${API_BASE}/api/files/${id}`, { method: 'DELETE' });
         if (response.ok) {
           fetchFiles();
           if (previewFile?.id === id) {
@@ -462,7 +466,7 @@ function App() {
   const handleDownload = (e, file) => {
     e.stopPropagation();
     const link = document.createElement('a');
-    link.href = `/api/files/download/${file.id}?download=true`;
+    link.href = `${API_BASE}/api/files/download/${file.id}?download=true`;
     link.download = file.originalName;
     document.body.appendChild(link);
     link.click();
@@ -782,7 +786,7 @@ function App() {
                   <div className="file-card-preview">
                     {file.category === 'images' ? (
                       <img 
-                        src={`/api/files/download/${file.id}`} 
+                        src={`${API_BASE}/api/files/download/${file.id}`} 
                         alt={file.originalName} 
                         className="file-card-image"
                         loading="lazy"
@@ -1016,7 +1020,7 @@ function App() {
               <div className="modal-body">
                 {previewFile.category === 'images' && (
                   <img 
-                    src={`/api/files/download/${previewFile.id}`} 
+                    src={`${API_BASE}/api/files/download/${previewFile.id}`} 
                     alt={previewFile.originalName} 
                     className="preview-image"
                   />
@@ -1024,7 +1028,7 @@ function App() {
 
                 {previewFile.category === 'videos' && (
                   <video 
-                    src={`/api/files/download/${previewFile.id}`} 
+                    src={`${API_BASE}/api/files/download/${previewFile.id}`} 
                     controls 
                     autoPlay
                     className="preview-video"
@@ -1037,7 +1041,7 @@ function App() {
                       <Music size={40} />
                     </div>
                     <audio 
-                      src={`/api/files/download/${previewFile.id}`} 
+                      src={`${API_BASE}/api/files/download/${previewFile.id}`} 
                       controls 
                       autoPlay
                       className="preview-audio"

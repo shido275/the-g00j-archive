@@ -1,3 +1,7 @@
+const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+  ? '' 
+  : 'http://localhost:5000';
+
 export class ChunkUploader {
   constructor(file, options = {}) {
     this.file = file;
@@ -38,7 +42,7 @@ export class ChunkUploader {
       const savedUploadId = localStorage.getItem(storageKey);
 
       // Initialize session
-      const initResponse = await fetch('/api/upload/init', {
+      const initResponse = await fetch(`${API_BASE}/api/upload/init`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -115,7 +119,7 @@ export class ChunkUploader {
     formData.append('uploadId', this.uploadId);
     formData.append('chunkIndex', index);
 
-    const response = await fetch('/api/upload/chunk', {
+    const response = await fetch(`${API_BASE}/api/upload/chunk`, {
       method: 'POST',
       body: formData
     });
@@ -163,7 +167,7 @@ export class ChunkUploader {
   }
 
   async finalizeUpload() {
-    const response = await fetch('/api/upload/complete', {
+    const response = await fetch(`${API_BASE}/api/upload/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
