@@ -101,6 +101,9 @@ function App() {
   const [savingTags, setSavingTags] = useState(false);
   const [mbCoverUrl, setMbCoverUrl] = useState(null); // cover art of selected match
   const [fetchingMbCover, setFetchingMbCover] = useState(false);
+  const [showArchivesPicker, setShowArchivesPicker] = useState(false);
+  const [archivesImages, setArchivesImages] = useState([]);
+  const [loadingArchivesImages, setLoadingArchivesImages] = useState(false);
 
   const openTagger = async (file) => {
     setTaggerFile(file);
@@ -217,6 +220,68 @@ function App() {
       setSavingTags(false);
     }
   };
+
+  const handleLocalCoverChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setTaggerTags(prev => ({ ...prev, coverArtUrl: event.target.result }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const openArchivesPicker = async () => {
+    setShowArchivesPicker(true);
+    setLoadingArchivesImages(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/files?category=images`);
+      if (response.ok) {
+        const data = await response.json();
+        setArchivesImages(data);
+      }
+    } catch (err) {
+      console.error('Failed to load archives images:', err);
+    } finally {
+      setLoadingArchivesImages(false);
+    }
+  };
+
+  const submitToMusicBrainz = () => {
+    if (!taggerFile) return;
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'https://musicbrainz.org/release/add';
+    form.target = '_blank';
+    form.enctype = 'multipart/form-data';
+
+    const addField = (name, value) => {
+      if (value !== undefined && value !== null && value !== '') {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      }
+    };
+
+    // Seed release details
+    addField('name', taggerTags.album || taggerTags.title || 'Single');
+    addField('artist_credit.names.0.name', taggerTags.artist || 'Unknown Artist');
+    if (taggerTags.year) {
+      addField('events.0.date.year', taggerTags.year);
+    }
+    addField('mediums.0.format', 'Digital Media');
+    
+    // Seed track details
+    addField('mediums.0.track.0.name', taggerTags.title || taggerFile.originalName);
+    addField('mediums.0.track.0.artist_credit.names.0.name', taggerTags.artist || 'Unknown Artist');
+
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
+  };
+
 
   const fetchLyrics = async (trackName) => {
     setLoadingLyrics(true);
@@ -1770,14 +1835,52 @@ function App() {
                       </div>
 
                       <div className="ytm-tagger-row">
-                        <label className="ytm-tagger-label">Cover Art URL</label>
-                        <input 
-                          type="text" 
-                          className="ytm-tagger-input"
-                          value={taggerTags.coverArtUrl}
-                          onChange={(e) => setTaggerTags(prev => ({ ...prev, coverArtUrl: e.target.value }))}
-                          placeholder="Paste cover image URL..."
-                        />
+                        <label className="ytm-tagger-label">Cover Art Source</label>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <input 
+                            type="text" 
+                            className="ytm-tagger-input"
+                            style={{ flex: 1 }}
+                            value={taggerTags.coverArtUrl.startsWith('data:') ? '[Local Image Loaded]' : taggerTags.coverArtUrl}
+                            onChange={(e) => setTaggerTags(prev => ({ ...prev, coverArtUrl: e.target.value }))}
+                            placeholder="Paste cover image URL..."
+                            disabled={taggerTags.coverArtUrl.startsWith('data:')}
+                          />
+                          {taggerTags.coverArtUrl.startsWith('data:') && (
+                            <button 
+                              className="file-action-btn btn-delete"
+                              style={{ margin: 0, padding: '0 8px', height: '38px', minWidth: '38px' }}
+                              onClick={() => setTaggerTags(prev => ({ ...prev, coverArtUrl: '' }))}
+                              title="Clear Local Image"
+                              type="button"
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                          <button 
+                            className="glow-btn"
+                            style={{ margin: 0, padding: '0 12px', height: '38px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
+                            onClick={() => document.getElementById('local-cover-input').click()}
+                            type="button"
+                          >
+                            Browse Local...
+                          </button>
+                          <button 
+                            className="glow-btn"
+                            style={{ margin: 0, padding: '0 12px', height: '38px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
+                            onClick={openArchivesPicker}
+                            type="button"
+                          >
+                            Archives...
+                          </button>
+                          <input 
+                            type="file"
+                            id="local-cover-input"
+                            accept="image/*"
+                            style={{ display: 'none' }}
+                            onChange={handleLocalCoverChange}
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -1911,10 +2014,20 @@ function App() {
               )}
 
               <footer className="modal-footer">
-                {!taggerFile?.originalName.toLowerCase().endsWith('.mp3') && (
+                {!taggerFile?.originalName.toLowerCase().endsWith('.mp3') ? (
                   <span style={{ marginRight: 'auto', fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
                     * Non-MP3 files: database only metadata edit (physical tagging disabled)
                   </span>
+                ) : (
+                  <button 
+                    className="modal-btn"
+                    onClick={submitToMusicBrainz}
+                    title="Seed this metadata back to MusicBrainz"
+                    style={{ color: 'var(--accent-indigo)', marginRight: 'auto' }}
+                    type="button"
+                  >
+                    Submit to MusicBrainz
+                  </button>
                 )}
                 <button className="modal-btn" onClick={() => setTaggerFile(null)}>
                   Cancel
@@ -1925,6 +2038,63 @@ function App() {
                   disabled={savingTags || loadingTaggerData}
                 >
                   {savingTags ? 'Writing Tags...' : 'Save & Tag File'}
+                </button>
+              </footer>
+            </div>
+          </div>
+        )}
+
+        {/* Archives Image Picker Modal Overlay */}
+        {showArchivesPicker && (
+          <div className="modal-overlay" style={{ zIndex: 1300 }} onClick={() => setShowArchivesPicker(false)}>
+            <div className="modal-container glass-panel" style={{ maxWidth: '550px', width: '90%' }} onClick={(e) => e.stopPropagation()}>
+              <header className="modal-header">
+                <span className="modal-title-text">Select Image from Archives</span>
+                <button className="modal-close-btn" onClick={() => setShowArchivesPicker(false)}>
+                  <X size={18} />
+                </button>
+              </header>
+              
+              <div className="modal-body" style={{ maxHeight: '450px', overflowY: 'auto' }}>
+                {loadingArchivesImages ? (
+                  <div style={{ textAlign: 'center', padding: '32px' }}>
+                    <RefreshCw className="spin" style={{ animation: 'spin 1.5s linear infinite', margin: '0 auto 8px auto' }} size={24} />
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Loading Archives images...</span>
+                  </div>
+                ) : archivesImages.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '32px 16px', border: '1px dashed var(--glass-border)', borderRadius: '6px', fontSize: '0.85rem', color: 'var(--text-tertiary)' }}>
+                    No images found in G00J Archives. Upload images first!
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', padding: '4px' }}>
+                    {archivesImages.map(img => (
+                      <div 
+                        key={img.id} 
+                        className="ytm-archives-img-option"
+                        onClick={() => {
+                          setTaggerTags(prev => ({
+                            ...prev,
+                            coverArtUrl: `${API_BASE}/api/files/download/${img.id}`
+                          }));
+                          setShowArchivesPicker(false);
+                        }}
+                      >
+                        <img 
+                          src={`${API_BASE}/api/files/download/${img.id}`} 
+                          alt={img.originalName} 
+                        />
+                        <div className="name-label" title={img.originalName}>
+                          {img.originalName}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <footer className="modal-footer">
+                <button className="modal-btn" onClick={() => setShowArchivesPicker(false)}>
+                  Close
                 </button>
               </footer>
             </div>

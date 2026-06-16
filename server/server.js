@@ -1330,19 +1330,56 @@ app.post('/api/files/:id/tag', async (req, res) => {
 
       if (coverArtUrl) {
         try {
-          const imgResponse = await fetch(coverArtUrl);
-          if (imgResponse.ok) {
-            const buffer = await imgResponse.arrayBuffer();
-            const contentType = imgResponse.headers.get('content-type') || 'image/jpeg';
+          let buffer;
+          let contentType;
+
+          if (coverArtUrl.startsWith('data:')) {
+            const matches = coverArtUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+            if (matches && matches.length === 3) {
+              contentType = matches[1];
+              buffer = Buffer.from(matches[2], 'base64');
+            } else {
+              throw new Error('Invalid base64 data URI format');
+            }
+          } else if (coverArtUrl.includes('/api/files/download/')) {
+            const parts = coverArtUrl.split('/api/files/download/');
+            const targetFileId = parts[1].split('?')[0];
+            const targetFile = db.getFile(targetFileId);
+            if (targetFile) {
+              const targetFilePath = getGitFilePath(targetFile);
+              if (fs.existsSync(targetFilePath)) {
+                buffer = fs.readFileSync(targetFilePath);
+                contentType = targetFile.mimeType;
+              } else {
+                throw new Error(`Archive file not found on disk: ${targetFilePath}`);
+              }
+            } else {
+              throw new Error(`Archive file record not found: ${targetFileId}`);
+            }
+          }
+
+          // Fallback to fetch
+          if (!buffer) {
+            const imgResponse = await fetch(coverArtUrl);
+            if (imgResponse.ok) {
+              const arrayBuf = await imgResponse.arrayBuffer();
+              buffer = Buffer.from(arrayBuf);
+              contentType = imgResponse.headers.get('content-type') || 'image/jpeg';
+            } else {
+              throw new Error(`HTTP ${imgResponse.status} trying to fetch remote cover`);
+            }
+          }
+
+          if (buffer) {
             tags.image = {
               mime: contentType,
               type: { id: 3, name: 'front cover' },
               description: 'Cover Art',
-              imageBuffer: Buffer.from(buffer)
+              imageBuffer: buffer
             };
           }
         } catch (err) {
-          console.error('Failed to download cover art:', err.message);
+          console.error('Failed to parse or fetch cover art:', err.message);
         }
       } else if (coverArtUrl === null || coverArtUrl === '') {
         // Remove image (do not set tags.image)
