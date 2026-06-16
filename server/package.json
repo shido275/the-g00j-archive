@@ -1,0 +1,17 @@
+{
+  "name": "g00j-archives-server",
+  "version": "1.0.0",
+  "description": "Express server for the G00J Archives",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mime-types": "^2.1.35",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^9.0.1"
+  }
+}

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Built assets
+client/dist/
+client/dist-ssr/
+
+# Persistent Cloud Storage Files & Database (Do not track in git)
+server/data/
+server/data/uploads/
+server/data/temp/
+server/data/db.json
+server/data/db.json.tmp
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Editor & System Files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
