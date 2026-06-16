@@ -18,7 +18,7 @@ const gitQueue = [];
 let gitProcessing = false;
 
 // Resolve folder hierarchy to create directory path in git clone
-function getFolderHierarchyPath(folderId) {
+export function getFolderHierarchyPath(folderId) {
   if (!folderId) return '';
   const folders = db.getFolders();
   const pathParts = [];
@@ -90,17 +90,8 @@ export const gitSync = {
   },
 
   queueUpload(file) {
-    const folderPath = getFolderHierarchyPath(file.folderId);
     enqueueGitTask(async () => {
       console.log(`[Git Sync] Syncing upload to GitHub: ${file.originalName}`);
-      const destDir = path.join(GIT_REPO_DIR, folderPath);
-      const destFilePath = path.join(destDir, file.originalName);
-      const sourceFilePath = path.join(UPLOADS_DIR, file.savedName);
-
-      if (!fs.existsSync(sourceFilePath)) {
-        console.error(`[Git Sync] Source file does not exist: ${sourceFilePath}`);
-        return;
-      }
 
       // 1. Pull latest to avoid push conflicts
       try {
@@ -109,11 +100,7 @@ export const gitSync = {
         console.log('[Git Sync] Pull failed or branch not set up. Proceeding...');
       }
 
-      // 2. Copy file to destination in local git clone
-      fs.mkdirSync(destDir, { recursive: true });
-      fs.copyFileSync(sourceFilePath, destFilePath);
-
-      // 3. Stage, commit and push
+      // 2. Stage, commit and push
       try {
         await runGitCmd('git add -A');
         await runGitCmd(`git commit -m "Upload ${file.originalName}"`);

@@ -7,7 +7,7 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import mime from 'mime-types';
 import { db } from './db.js';
-import { gitSync } from './gitSync.js';
+import { gitSync, getFolderHierarchyPath } from './gitSync.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,14 +20,17 @@ app.use(express.json());
 
 // Set up storage directories
 const DATA_DIR = path.join(__dirname, 'data');
-const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+const GIT_REPO_DIR = path.join(DATA_DIR, 'github-repo');
 const TEMP_DIR = path.join(DATA_DIR, 'temp');
 
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
+}
+
+// Helper to resolve the direct path inside local Git repository clone
+function getGitFilePath(file) {
+  const folderPath = getFolderHierarchyPath(file.folderId);
+  return path.join(GIT_REPO_DIR, folderPath, file.originalName);
 }
 
 // Multer for chunk uploads (temp files)
@@ -155,7 +158,10 @@ app.post('/api/upload/complete', async (req, res) => {
 
   const chunkDir = path.join(TEMP_DIR, uploadId);
   const fileId = uuidv4() + path.extname(fileName);
-  const finalPath = path.join(UPLOADS_DIR, fileId);
+  const folderPath = getFolderHierarchyPath(folderId);
+  const destDir = path.join(GIT_REPO_DIR, folderPath);
+  fs.mkdirSync(destDir, { recursive: true });
+  const finalPath = path.join(destDir, fileName);
 
   if (!fs.existsSync(chunkDir)) {
     return res.status(404).json({ error: 'Upload session not found' });
@@ -309,7 +315,7 @@ function deleteFolderRecursive(folderId) {
   const filesInFolder = allFiles.filter(f => f.folderId === folderId);
   
   for (const file of filesInFolder) {
-    const filePath = path.join(UPLOADS_DIR, file.savedName);
+    const filePath = getGitFilePath(file);
     if (fs.existsSync(filePath)) {
       try {
         fs.unlinkSync(filePath);
@@ -357,7 +363,7 @@ app.get('/api/files/download/:id', (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(UPLOADS_DIR, file.savedName);
+    const filePath = getGitFilePath(file);
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'Physical file not found on disk' });
     }
@@ -417,7 +423,7 @@ app.delete('/api/files/:id', (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = path.join(UPLOADS_DIR, file.savedName);
+    const filePath = getGitFilePath(file);
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
@@ -764,7 +770,10 @@ app.post('/api/scrape/download', async (req, res) => {
     const fileId = uuidv4() + path.extname(fileName);
     const resolvedMime = remoteResponse.headers.get('content-type') || mime.lookup(fileName) || 'application/octet-stream';
     const category = getCategory(resolvedMime);
-    const targetPath = path.join(UPLOADS_DIR, fileId);
+    const folderPath = getFolderHierarchyPath(folderId);
+    const destDir = path.join(GIT_REPO_DIR, folderPath);
+    fs.mkdirSync(destDir, { recursive: true });
+    const targetPath = path.join(destDir, fileName);
 
     const writer = fs.createWriteStream(targetPath);
     const reader = remoteResponse.body.getReader();
@@ -1053,7 +1062,10 @@ async function runScraperDownload(job) {
         const fileId = uuidv4() + path.extname(fileName);
         const resolvedMime = remoteResponse.headers.get('content-type') || mime.lookup(fileName) || 'application/octet-stream';
         const category = getCategory(resolvedMime);
-        const targetPath = path.join(UPLOADS_DIR, fileId);
+        const folderPath = getFolderHierarchyPath(job.folderId);
+        const destDir = path.join(GIT_REPO_DIR, folderPath);
+        fs.mkdirSync(destDir, { recursive: true });
+        const targetPath = path.join(destDir, fileName);
 
         const writer = fs.createWriteStream(targetPath);
         const reader = remoteResponse.body.getReader();
