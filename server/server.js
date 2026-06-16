@@ -358,6 +358,34 @@ app.delete('/api/folders/:id', (req, res) => {
   }
 });
 
+// Get single file details for sharing
+app.get('/api/files/:id', (req, res) => {
+  try {
+    const file = db.getFile(req.params.id);
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    res.json(file);
+  } catch (error) {
+    console.error('Get file error:', error);
+    res.status(500).json({ error: 'Failed to fetch file details' });
+  }
+});
+
+// Get single folder details for sharing
+app.get('/api/folders/:id', (req, res) => {
+  try {
+    const folder = db.getFolder(req.params.id);
+    if (!folder) {
+      return res.status(404).json({ error: 'Folder not found' });
+    }
+    res.json(folder);
+  } catch (error) {
+    console.error('Get folder error:', error);
+    res.status(500).json({ error: 'Failed to fetch folder details' });
+  }
+});
+
 // Download/Stream file with support for HTTP Range requests
 app.get('/api/files/download/:id', async (req, res) => {
   try {

@@ -32,7 +32,9 @@ import {
   ChevronDown,
   ListMusic,
   Tag,
-  Radio
+  Radio,
+  Share2,
+  Copy
 } from 'lucide-react';
 import { ChunkUploader } from './utils/chunkUploader';
 
@@ -112,11 +114,21 @@ function App() {
   const [archivesImages, setArchivesImages] = useState([]);
   const [loadingArchivesImages, setLoadingArchivesImages] = useState(false);
 
-  // Distribution states
   const [showDistributeModal, setShowDistributeModal] = useState(false);
   const [distributeFile, setDistributeFile] = useState(null);
   const [distributeTags, setDistributeTags] = useState(null);
   const [loadingDistributeData, setLoadingDistributeData] = useState(false);
+
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [shareTarget, setShareTarget] = useState(null); // file or folder
+  const [shareTargetType, setShareTargetType] = useState('file'); // 'file' or 'folder'
+  const [sharedFileId, setSharedFileId] = useState(null);
+  const [sharedFile, setSharedFile] = useState(null);
+  const [loadingSharedFile, setLoadingSharedFile] = useState(false);
+  const [sharedFileError, setSharedFileError] = useState(null);
+  const [sharedFolderRootId, setSharedFolderRootId] = useState(null);
+  const [sharedFolderRoot, setSharedFolderRoot] = useState(null);
 
   const openDistribute = async (file) => {
     setDistributeFile(file);
@@ -365,6 +377,74 @@ function App() {
     }
   }, [activeAudioTrack]);
 
+  // Parse URL share parameters
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sfId = params.get('shareFile');
+    const sfFolderId = params.get('shareFolder');
+
+    if (sfId) {
+      setSharedFileId(sfId);
+      setLoadingSharedFile(true);
+      fetch(`${API_BASE}/api/files/${sfId}`)
+        .then(res => {
+          if (!res.ok) throw new Error('Shared file not found or inaccessible');
+          return res.json();
+        })
+        .then(data => {
+          setSharedFile(data);
+          const textMimes = [
+            'text/plain', 'text/html', 'text/css', 'text/csv', 
+            'application/javascript', 'application/json', 'application/x-javascript'
+          ];
+          if (data.mimeType.startsWith('text/') || textMimes.includes(data.mimeType)) {
+            fetch(`${API_BASE}/api/files/download/${data.id}`)
+              .then(res => {
+                if (!res.ok) throw new Error('Could not download content');
+                return res.text();
+              })
+              .then(text => {
+                setTextContent(text.slice(0, 10000));
+              })
+              .catch(err => setTextContent(`Failed to load text: ${err.message}`));
+          }
+        })
+        .catch(err => {
+          setSharedFileError(err.message);
+        })
+        .finally(() => {
+          setLoadingSharedFile(false);
+        });
+    } else if (sfFolderId) {
+      setSharedFolderRootId(sfFolderId);
+      setCurrentFolderId(sfFolderId);
+      fetch(`${API_BASE}/api/folders/${sfFolderId}`)
+        .then(res => {
+          if (!res.ok) throw new Error('Shared folder not found');
+          return res.json();
+        })
+        .then(data => {
+          setSharedFolderRoot(data);
+        })
+        .catch(err => console.error('Error fetching shared folder root:', err));
+    }
+  }, []);
+
+  const getShareUrlBase = () => {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return 'https://shido275.github.io/the-g00j-archive';
+    }
+    return window.location.origin + window.location.pathname.replace(/\/$/, '');
+  };
+
+  const openShareModal = (e, target, type = 'file') => {
+    e.stopPropagation();
+    setShareTarget(target);
+    setShareTargetType(type);
+    setCopied(false);
+    setShowShareModal(true);
+  };
+
   const formatTime = (secs) => {
     if (isNaN(secs) || secs === Infinity) return '0:00';
     const m = Math.floor(secs / 60);
@@ -484,6 +564,21 @@ function App() {
   const dragCounter = useRef(0);
 
 
+  const isDescendantOfSharedRoot = (folderId) => {
+    if (!sharedFolderRootId) return true;
+    if (folderId === sharedFolderRootId) return true;
+    let currentId = folderId;
+    const visited = new Set();
+    while (currentId) {
+      if (visited.has(currentId)) break;
+      visited.add(currentId);
+      if (currentId === sharedFolderRootId) return true;
+      const f = allFolders.find(x => x.id === currentId);
+      currentId = f ? f.parentId : null;
+    }
+    return false;
+  };
+
   // Fetch files on search or category change
   const fetchFiles = async () => {
     setLoading(true);
@@ -502,7 +597,10 @@ function App() {
       
       const response = await fetch(url.toString());
       if (response.ok) {
-        const data = await response.json();
+        let data = await response.json();
+        if (sharedFolderRootId) {
+          data = data.filter(f => isDescendantOfSharedRoot(f.folderId));
+        }
         setFiles(data);
       }
     } catch (error) {
@@ -522,7 +620,10 @@ function App() {
       }
       const response = await fetch(url.toString());
       if (response.ok) {
-        const data = await response.json();
+        let data = await response.json();
+        if (sharedFolderRootId) {
+          data = data.filter(f => isDescendantOfSharedRoot(f.parentId));
+        }
         setFolders(data);
       }
 
@@ -729,6 +830,9 @@ function App() {
       const folder = allFolders.find(f => f.id === currentId);
       if (folder) {
         crumbs.unshift(folder);
+        if (currentId === sharedFolderRootId) {
+          break; // Stop climbing up beyond the shared folder root
+        }
         currentId = folder.parentId;
       } else {
         break;
@@ -925,6 +1029,167 @@ function App() {
     }
   };
 
+  if (sharedFileId) {
+    if (loadingSharedFile) {
+      return (
+        <div className="shared-layout">
+          <div className="ambient-glow-1"></div>
+          <div className="ambient-glow-2"></div>
+          <div className="shared-card glass-panel" style={{ justifyContent: 'center', minHeight: '300px' }}>
+            <RefreshCw className="spin" style={{ animation: 'spin 1.5s linear infinite', color: 'var(--accent-indigo)', marginBottom: '16px' }} size={40} />
+            <p style={{ color: 'var(--text-secondary)' }}>Retrieving shared file details...</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (sharedFileError) {
+      return (
+        <div className="shared-layout">
+          <div className="ambient-glow-1"></div>
+          <div className="ambient-glow-2"></div>
+          <div className="shared-card glass-panel" style={{ justifyContent: 'center', minHeight: '300px' }}>
+            <AlertCircle size={48} style={{ color: 'var(--accent-rose)', marginBottom: '16px' }} />
+            <h2 style={{ fontSize: '1.25rem', marginBottom: '8px', color: '#fff' }}>Access Error</h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>{sharedFileError}</p>
+            <button className="glow-btn" onClick={() => window.location.href = '/'} style={{ padding: '10px 24px', borderRadius: '8px' }}>
+              Go to Homepage
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (sharedFile) {
+      return (
+        <div className="shared-layout">
+          <div className="ambient-glow-1"></div>
+          <div className="ambient-glow-2"></div>
+          
+          <div className="shared-card glass-panel">
+            <div className="shared-logo">
+              <div className="logo-icon" style={{ width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--gradient-accent)', borderRadius: '8px' }}>
+                <HardDrive size={18} color="#fff" />
+              </div>
+              <span className="logo-text" style={{ fontSize: '1.1rem' }}>G00J ARCHIVES</span>
+            </div>
+
+            <h2 style={{ fontSize: '1.3rem', fontWeight: 700, marginBottom: '20px', color: '#fff', wordBreak: 'break-all' }}>
+              {sharedFile.artist && sharedFile.title ? `${sharedFile.artist} - ${sharedFile.title}` : sharedFile.originalName}
+            </h2>
+
+            {/* Inline Preview box based on file type */}
+            <div className="shared-preview-box">
+              {sharedFile.category === 'images' && (
+                <img 
+                  src={`${API_BASE}/api/files/download/${sharedFile.id}`} 
+                  alt={sharedFile.originalName} 
+                />
+              )}
+
+              {sharedFile.category === 'videos' && (
+                <video 
+                  src={`${API_BASE}/api/files/download/${sharedFile.id}`} 
+                  controls 
+                  autoPlay
+                />
+              )}
+
+              {sharedFile.category === 'audio' && (
+                <div className="preview-audio-container" style={{ width: '100%' }}>
+                  <div className="audio-disk playing" style={{ margin: '0 auto 16px auto', width: '80px', height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', color: '#fff' }}>
+                    <Music size={32} />
+                  </div>
+                  <audio 
+                    src={`${API_BASE}/api/files/download/${sharedFile.id}`} 
+                    controls 
+                    autoPlay
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+
+              {/* Text document & code */}
+              {(sharedFile.mimeType.startsWith('text/') || 
+                sharedFile.mimeType === 'application/json' || 
+                sharedFile.mimeType === 'application/javascript') && (
+                <pre>
+                  {textContent}
+                </pre>
+              )}
+
+              {/* Fallback for files that cannot be viewed inline */}
+              {sharedFile.category !== 'images' && 
+               sharedFile.category !== 'videos' && 
+               sharedFile.category !== 'audio' && 
+               !sharedFile.mimeType.startsWith('text/') && 
+               sharedFile.mimeType !== 'application/json' && 
+               sharedFile.mimeType !== 'application/javascript' && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '32px' }}>
+                  <div className="list-icon-box" style={{ width: '64px', height: '64px', borderRadius: '12px', background: 'rgba(99, 102, 241, 0.1)', color: 'var(--accent-indigo)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {getCategoryIcon(sharedFile.category, 32)}
+                  </div>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Preview not supported for this file type</span>
+                </div>
+              )}
+            </div>
+
+            {/* Metadata attributes */}
+            <div className="shared-details">
+              <div className="shared-detail-row">
+                <span className="shared-detail-label">File Type</span>
+                <span className="shared-detail-value" style={{ textTransform: 'capitalize' }}>{sharedFile.category} ({sharedFile.mimeType.split('/')[1] || sharedFile.mimeType})</span>
+              </div>
+              <div className="shared-detail-row">
+                <span className="shared-detail-label">Size</span>
+                <span className="shared-detail-value">{formatBytes(sharedFile.size)}</span>
+              </div>
+              <div className="shared-detail-row">
+                <span className="shared-detail-label">Upload Date</span>
+                <span className="shared-detail-value">{new Date(sharedFile.uploadDate).toLocaleString()}</span>
+              </div>
+              {sharedFile.artist && (
+                <div className="shared-detail-row">
+                  <span className="shared-detail-label">Artist</span>
+                  <span className="shared-detail-value">{sharedFile.artist}</span>
+                </div>
+              )}
+              {sharedFile.title && (
+                <div className="shared-detail-row">
+                  <span className="shared-detail-label">Track Title</span>
+                  <span className="shared-detail-value">{sharedFile.title}</span>
+                </div>
+              )}
+              {sharedFile.album && (
+                <div className="shared-detail-row">
+                  <span className="shared-detail-label">Album</span>
+                  <span className="shared-detail-value">{sharedFile.album}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Download button */}
+            <button 
+              className="glow-btn shared-download-btn"
+              onClick={(e) => handleDownload(e, sharedFile)}
+            >
+              <Download size={18} />
+              Download File
+            </button>
+
+            <button 
+              className="modal-btn" 
+              style={{ width: '100%', border: '1px solid var(--glass-border)', background: 'transparent' }}
+              onClick={() => window.location.href = '/'}
+            >
+              Back to Home
+            </button>
+          </div>
+        </div>
+      );
+    }
+  }
+
   return (
     <div 
       className="app-container"
@@ -938,13 +1203,14 @@ function App() {
       <div className="ambient-glow-2"></div>
 
       {/* Sidebar Panel */}
-      <aside className="sidebar glass-panel">
-        <div className="logo-section">
-          <div className="logo-icon">
-            <HardDrive size={22} color="#fff" />
+      {!sharedFolderRootId && (
+        <aside className="sidebar glass-panel">
+          <div className="logo-section">
+            <div className="logo-icon">
+              <HardDrive size={22} color="#fff" />
+            </div>
+            <h1 className="logo-text">G00J ARCHIVES</h1>
           </div>
-          <h1 className="logo-text">G00J ARCHIVES</h1>
-        </div>
 
         <nav className="nav-menu">
           <a 
@@ -1020,6 +1286,7 @@ function App() {
           <span className="storage-desc">Unlimited Storage Enabled</span>
         </div>
       </aside>
+      )}
 
       {/* Main Panel */}
       <main className={`main-content ${activeAudioTrack ? 'ytm-player-bar-offset' : ''}`}>
@@ -1055,46 +1322,50 @@ function App() {
               </button>
             )}
 
-            <button 
-              className="glow-btn action-btn" 
-              onClick={handleCreateFolder}
-              style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--glass-border)', boxShadow: 'none' }}
-            >
-              <Folder size={16} />
-              New Folder
-            </button>
+            {!sharedFolderRootId && (
+              <>
+                <button 
+                  className="glow-btn action-btn" 
+                  onClick={handleCreateFolder}
+                  style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--glass-border)', boxShadow: 'none' }}
+                >
+                  <Folder size={16} />
+                  New Folder
+                </button>
 
-            <button 
-              className="glow-btn action-btn" 
-              onClick={() => { 
-                setShowScraper(true); 
-                setScraperUrl(''); 
-                setScrapedResults([]); 
-                setDownloadingUrls({}); 
-                setScheduleFolderId(currentFolderId || 'root');
-                fetchScraperJobs();
-              }}
-              style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--glass-border)', boxShadow: 'none' }}
-            >
-              <Search size={16} />
-              Scrape Link
-            </button>
+                <button 
+                  className="glow-btn action-btn" 
+                  onClick={() => { 
+                    setShowScraper(true); 
+                    setScraperUrl(''); 
+                    setScrapedResults([]); 
+                    setDownloadingUrls({}); 
+                    setScheduleFolderId(currentFolderId || 'root');
+                    fetchScraperJobs();
+                  }}
+                  style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--glass-border)', boxShadow: 'none' }}
+                >
+                  <Search size={16} />
+                  Scrape Link
+                </button>
 
-            <button 
-              className="glow-btn action-btn" 
-              onClick={handleUploadClick}
-            >
-              <Upload size={16} />
-              Upload Files
-            </button>
-            
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              style={{ display: 'none' }} 
-              multiple 
-              onChange={(e) => handleFilesSelect(e.target.files)} 
-            />
+                <button 
+                  className="glow-btn action-btn" 
+                  onClick={handleUploadClick}
+                >
+                  <Upload size={16} />
+                  Upload Files
+                </button>
+                
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  style={{ display: 'none' }} 
+                  multiple 
+                  onChange={(e) => handleFilesSelect(e.target.files)} 
+                />
+              </>
+            )}
           </div>
         </header>
 
@@ -1112,43 +1383,57 @@ function App() {
           {/* Breadcrumbs Navigation */}
           {activeCategory === 'all' && !searchQuery && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-              <span 
-                onClick={() => setCurrentFolderId(null)}
-                style={{ cursor: 'pointer', color: currentFolderId ? 'var(--accent-indigo)' : 'inherit', fontWeight: currentFolderId ? 500 : 600 }}
-              >
-                Root
-              </span>
-              {getBreadcrumbs().map((crumb, idx) => (
-                <React.Fragment key={crumb.id}>
-                  <span style={{ color: 'var(--text-tertiary)' }}>/</span>
-                  <span 
-                    onClick={() => setCurrentFolderId(crumb.id)}
-                    style={{ 
-                      cursor: 'pointer', 
-                      color: idx === getBreadcrumbs().length - 1 ? 'inherit' : 'var(--accent-indigo)',
-                      fontWeight: idx === getBreadcrumbs().length - 1 ? 600 : 500
-                    }}
-                  >
-                    {crumb.name}
-                  </span>
-                </React.Fragment>
-              ))}
+              {!sharedFolderRootId ? (
+                <span 
+                  onClick={() => setCurrentFolderId(null)}
+                  style={{ cursor: 'pointer', color: currentFolderId ? 'var(--accent-indigo)' : 'inherit', fontWeight: currentFolderId ? 500 : 600 }}
+                >
+                  Root
+                </span>
+              ) : (
+                <span 
+                  onClick={() => setCurrentFolderId(sharedFolderRootId)}
+                  style={{ cursor: 'pointer', color: currentFolderId !== sharedFolderRootId ? 'var(--accent-indigo)' : 'inherit', fontWeight: currentFolderId !== sharedFolderRootId ? 500 : 600 }}
+                >
+                  {sharedFolderRoot?.name || 'Shared Root'}
+                </span>
+              )}
+              {(() => {
+                const visibleCrumbs = getBreadcrumbs().filter(crumb => !sharedFolderRootId || crumb.id !== sharedFolderRootId);
+                return visibleCrumbs.map((crumb, idx) => (
+                  <React.Fragment key={crumb.id}>
+                    <span style={{ color: 'var(--text-tertiary)' }}>/</span>
+                    <span 
+                      onClick={() => setCurrentFolderId(crumb.id)}
+                      style={{ 
+                        cursor: 'pointer', 
+                        color: idx === visibleCrumbs.length - 1 ? 'inherit' : 'var(--accent-indigo)',
+                        fontWeight: idx === visibleCrumbs.length - 1 ? 600 : 500
+                      }}
+                    >
+                      {crumb.name}
+                    </span>
+                  </React.Fragment>
+                ));
+              })()}
             </div>
           )}
 
           {/* Drag drop zone helper */}
-          <div 
-            className={`drag-drop-zone ${isDragging ? 'dragging' : ''}`}
-            onClick={handleUploadClick}
-          >
-            <div className="drag-icon-box">
-              <Upload size={24} />
+          {!sharedFolderRootId && (
+            <div 
+              className={`drag-drop-zone ${isDragging ? 'dragging' : ''}`}
+              onClick={handleUploadClick}
+            >
+              <div className="drag-icon-box">
+                <Upload size={24} />
+              </div>
+              <div>
+                <p className="drag-text-main">Drag and drop files here to upload</p>
+                <p className="drag-text-sub">Supports large files, archives, video, images, or documents</p>
+              </div>
             </div>
-            <div>
-              <p className="drag-text-main">Drag and drop files here to upload</p>
-              <p className="drag-text-sub">Supports large files, archives, video, images, or documents</p>
-            </div>
-          </div>
+          )}
 
           {loading && files.length === 0 && folders.length === 0 ? (
             <div className="empty-state">
@@ -1158,8 +1443,13 @@ function App() {
           ) : files.length === 0 && folders.length === 0 ? (
             <div className="empty-state">
               <FolderOpen className="empty-icon" size={48} />
-              <p className="drag-text-main">No files or folders found in the G00J Archives</p>
-              <p className="drag-text-sub">Select files or drag them above to start uploading to your storage!</p>
+              <p className="drag-text-main">No files or folders found</p>
+              <p className="drag-text-sub">
+                {!sharedFolderRootId 
+                  ? "Select files or drag them above to start uploading to your storage!" 
+                  : "This shared folder is empty."
+                }
+              </p>
             </div>
           ) : viewMode === 'grid' ? (
             // Grid Layout
@@ -1185,13 +1475,27 @@ function App() {
                     </div>
                   </div>
                   <div className="file-card-actions" style={{ marginTop: '12px', paddingTop: '12px' }}>
-                    <button 
-                      className="file-action-btn btn-delete"
-                      onClick={(e) => handleDeleteFolder(e, folder.id, folder.name)}
-                      title="Delete Folder"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {!sharedFolderRootId ? (
+                      <>
+                        <button 
+                          className="file-action-btn"
+                          onClick={(e) => openShareModal(e, folder, 'folder')}
+                          title="Share Folder"
+                          style={{ color: 'var(--accent-indigo)', marginRight: '8px' }}
+                        >
+                          <Share2 size={14} />
+                        </button>
+                        <button 
+                          className="file-action-btn btn-delete"
+                          onClick={(e) => handleDeleteFolder(e, folder.id, folder.name)}
+                          title="Delete Folder"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </>
+                    ) : (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>Read Only</span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1242,7 +1546,7 @@ function App() {
                     >
                       <Eye size={14} />
                     </button>
-                    {file.category === 'audio' && (
+                    {file.category === 'audio' && !sharedFolderRootId && (
                       <>
                         <button 
                           className="file-action-btn"
@@ -1269,13 +1573,25 @@ function App() {
                     >
                       <Download size={14} />
                     </button>
-                    <button 
-                      className="file-action-btn btn-delete"
-                      onClick={(e) => handleDelete(e, file.id)}
-                      title="Delete File"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {!sharedFolderRootId && (
+                      <>
+                        <button 
+                          className="file-action-btn"
+                          onClick={(e) => openShareModal(e, file)}
+                          title="Share File"
+                          style={{ color: 'var(--accent-indigo)' }}
+                        >
+                          <Share2 size={14} />
+                        </button>
+                        <button 
+                          className="file-action-btn btn-delete"
+                          onClick={(e) => handleDelete(e, file.id)}
+                          title="Delete File"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1315,13 +1631,27 @@ function App() {
                       <td className="list-date-cell">{new Date(folder.createdDate).toLocaleDateString()}</td>
                       <td>
                         <div className="list-actions-cell" onClick={(e) => e.stopPropagation()}>
-                          <button 
-                            className="file-action-btn btn-delete"
-                            onClick={(e) => handleDeleteFolder(e, folder.id, folder.name)}
-                            title="Delete Folder"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {!sharedFolderRootId ? (
+                            <>
+                              <button 
+                                className="file-action-btn"
+                                onClick={(e) => openShareModal(e, folder, 'folder')}
+                                title="Share Folder"
+                                style={{ color: 'var(--accent-indigo)', marginRight: '8px' }}
+                              >
+                                <Share2 size={14} />
+                              </button>
+                              <button 
+                                className="file-action-btn btn-delete"
+                                onClick={(e) => handleDeleteFolder(e, folder.id, folder.name)}
+                                title="Delete Folder"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          ) : (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>Read Only</span>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1363,7 +1693,7 @@ function App() {
                           >
                             <Eye size={14} />
                           </button>
-                          {file.category === 'audio' && (
+                          {file.category === 'audio' && !sharedFolderRootId && (
                             <>
                               <button 
                                 className="file-action-btn"
@@ -1390,13 +1720,25 @@ function App() {
                           >
                             <Download size={14} />
                           </button>
-                          <button 
-                            className="file-action-btn btn-delete"
-                            onClick={(e) => handleDelete(e, file.id)}
-                            title="Delete File"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {!sharedFolderRootId && (
+                            <>
+                              <button 
+                                className="file-action-btn"
+                                onClick={(e) => openShareModal(e, file)}
+                                title="Share File"
+                                style={{ color: 'var(--accent-indigo)' }}
+                              >
+                                <Share2 size={14} />
+                              </button>
+                              <button 
+                                className="file-action-btn btn-delete"
+                                onClick={(e) => handleDelete(e, file.id)}
+                                title="Delete File"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -2379,6 +2721,66 @@ Comment: ${distributeTags?.comment || ''}
 
               <footer className="modal-footer">
                 <button className="modal-btn" onClick={() => setShowDistributeModal(false)}>
+                  Close
+                </button>
+              </footer>
+            </div>
+          </div>
+        )}
+
+        {/* Share Link Modal Overlay */}
+        {showShareModal && shareTarget && (
+          <div className="modal-overlay" onClick={() => setShowShareModal(false)}>
+            <div className="modal-container glass-panel" style={{ maxWidth: '500px' }} onClick={(e) => e.stopPropagation()}>
+              <header className="modal-header">
+                <span className="modal-title-text" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Share2 size={18} style={{ color: 'var(--accent-indigo)' }} />
+                  Share {shareTargetType === 'folder' ? 'Folder' : 'File'}
+                </span>
+                <button className="modal-close-btn" onClick={() => setShowShareModal(false)}>
+                  <X size={18} />
+                </button>
+              </header>
+
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px', textAlign: 'left' }}>
+                <p className="drag-text-sub" style={{ fontSize: '0.85rem' }}>
+                  Anyone with this link will have read-only access to view, preview, and download this {shareTargetType === 'folder' ? 'folder and all of its contents' : 'file'}.
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '6px', border: '1px solid var(--glass-border)' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{shareTargetType === 'folder' ? 'Folder Name' : 'File Name'}</span>
+                  <span style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 600, wordBreak: 'break-all' }}>
+                    {shareTargetType === 'folder' ? shareTarget.name : (shareTarget.originalName || shareTarget.name)}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <input 
+                    type="text" 
+                    className="search-input" 
+                    readOnly
+                    value={`${getShareUrlBase()}/?${shareTargetType === 'folder' ? 'shareFolder' : 'shareFile'}=${shareTarget.id}`}
+                    style={{ paddingLeft: '12px', fontSize: '0.85rem' }}
+                    onClick={(e) => e.target.select()}
+                  />
+                  <button 
+                    className="glow-btn modal-btn btn-action" 
+                    style={{ margin: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    onClick={() => {
+                      const url = `${getShareUrlBase()}/?${shareTargetType === 'folder' ? 'shareFolder' : 'shareFile'}=${shareTarget.id}`;
+                      navigator.clipboard.writeText(url);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                  >
+                    <Copy size={14} />
+                    {copied ? 'Copied!' : 'Copy Link'}
+                  </button>
+                </div>
+              </div>
+
+              <footer className="modal-footer">
+                <button className="modal-btn" onClick={() => setShowShareModal(false)}>
                   Close
                 </button>
               </footer>
