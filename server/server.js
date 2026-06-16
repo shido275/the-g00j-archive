@@ -359,17 +359,17 @@ app.delete('/api/folders/:id', (req, res) => {
 });
 
 // Download/Stream file with support for HTTP Range requests
-app.get('/api/files/download/:id', (req, res) => {
+app.get('/api/files/download/:id', async (req, res) => {
   try {
     const file = db.getFile(req.params.id);
     if (!file) {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    const filePath = getGitFilePath(file);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Physical file not found on disk' });
-    }
+    const filePath = await gitSync.ensureFileOnDisk(file);
+    res.on('close', () => {
+      gitSync.scheduleFileCleanup(file);
+    });
 
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
@@ -1247,10 +1247,7 @@ app.get('/api/files/:id/metadata', async (req, res) => {
     if (!file) {
       return res.status(404).json({ error: 'File not found' });
     }
-    const filePath = getGitFilePath(file);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Physical file not found on disk' });
-    }
+    const filePath = await gitSync.ensureFileOnDisk(file);
 
     let parsedTags = {};
     let coverArtBase64 = null;
@@ -1300,6 +1297,7 @@ app.get('/api/files/:id/metadata', async (req, res) => {
       },
       coverArt: coverArtBase64
     });
+    gitSync.scheduleFileCleanup(file);
   } catch (error) {
     console.error('Get file metadata error:', error);
     res.status(500).json({ error: `Failed to fetch file metadata: ${error.message}` });

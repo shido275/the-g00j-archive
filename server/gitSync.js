@@ -106,6 +106,16 @@ export const gitSync = {
         await runGitCmd(`git commit -m "Upload ${file.originalName}"`);
         await runGitCmd('git push origin main');
         console.log(`[Git Sync] Successfully synced upload to GitHub: ${file.originalName}`);
+
+        // Tell git to skip worktree tracking for this file and physically remove it
+        const folderPath = getFolderHierarchyPath(file.folderId);
+        const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
+        await runGitCmd(`git update-index --skip-worktree "${relativePath}"`);
+        const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
+        if (fs.existsSync(destFilePath)) {
+          fs.unlinkSync(destFilePath);
+          console.log(`[Git Sync] Physically cleaned up local file after successful sync: ${file.originalName}`);
+        }
       } catch (err) {
         console.error(`[Git Sync] Failed to commit/push upload: ${file.originalName}`, err);
       }
@@ -114,6 +124,7 @@ export const gitSync = {
 
   queueDelete(file) {
     const folderPath = getFolderHierarchyPath(file.folderId);
+    const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
     enqueueGitTask(async () => {
       console.log(`[Git Sync] Syncing deletion from GitHub: ${file.originalName}`);
       const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
@@ -125,12 +136,19 @@ export const gitSync = {
         console.log('[Git Sync] Pull failed or branch not set up. Proceeding...');
       }
 
-      // 2. Delete file if exists
+      // 2. Stop skipping worktree so Git registers the deletion
+      try {
+        await runGitCmd(`git update-index --no-skip-worktree "${relativePath}"`);
+      } catch (err) {
+        // Ignore if file wasn't skipped
+      }
+
+      // 3. Delete file if exists
       if (fs.existsSync(destFilePath)) {
         fs.unlinkSync(destFilePath);
       }
 
-      // 3. Stage, commit and push
+      // 4. Stage, commit and push
       try {
         await runGitCmd('git add -A');
         await runGitCmd(`git commit -m "Delete ${file.originalName}"`);
@@ -140,5 +158,44 @@ export const gitSync = {
         console.error(`[Git Sync] Failed to commit/push deletion: ${file.originalName}`, err);
       }
     });
+  },
+
+  async ensureFileOnDisk(file) {
+    const folderPath = getFolderHierarchyPath(file.folderId);
+    const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
+    if (fs.existsSync(destFilePath)) {
+      return destFilePath;
+    }
+
+    console.log(`[Git Sync] Checking out file on demand: ${file.originalName}`);
+    const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
+
+    try {
+      await runGitCmd(`git update-index --no-skip-worktree "${relativePath}"`);
+    } catch (err) {
+      // Ignore
+    }
+
+    await runGitCmd(`git checkout HEAD -- "${relativePath}"`);
+    return destFilePath;
+  },
+
+  scheduleFileCleanup(file) {
+    const folderPath = getFolderHierarchyPath(file.folderId);
+    const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
+
+    // Debounce/delay cleanup to avoid I/O thrashing during seekable range-request streaming
+    setTimeout(async () => {
+      try {
+        if (fs.existsSync(destFilePath)) {
+          const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
+          await runGitCmd(`git update-index --skip-worktree "${relativePath}"`);
+          fs.unlinkSync(destFilePath);
+          console.log(`[Git Sync] Cleaned up local file from disk (scheduled): ${file.originalName}`);
+        }
+      } catch (err) {
+        console.error(`[Git Sync] Failed to clean up file ${file.originalName}:`, err.message);
+      }
+    }, 20000); // 20 seconds delay
   }
 };
