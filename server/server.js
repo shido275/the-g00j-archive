@@ -6,6 +6,8 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import mime from 'mime-types';
+import NodeID3 from 'node-id3';
+import * as mm from 'music-metadata';
 import { db } from './db.js';
 import { gitSync, getFolderHierarchyPath } from './gitSync.js';
 
@@ -1169,6 +1171,216 @@ async function processScraperJobs() {
     console.error('[Scheduler] Error processing scraper jobs:', error);
   }
 }
+
+// MusicBrainz Recording Search Proxy
+app.get('/api/musicbrainz/search', async (req, res) => {
+  const { q } = req.query;
+  if (!q) {
+    return res.status(400).json({ error: 'Query parameter "q" is required' });
+  }
+  try {
+    const response = await fetch(`https://musicbrainz.org/ws/2/recording?query=${encodeURIComponent(q)}&fmt=json`, {
+      headers: {
+        'User-Agent': 'G00JArchives/1.0.0 ( shido275@github.com )'
+      }
+    });
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `MusicBrainz API error (HTTP ${response.status})` });
+    }
+    const data = await response.json();
+    
+    // Map to a clean, easy-to-use structure for the client
+    const recordings = (data.recordings || []).map(rec => {
+      const artist = (rec['artist-credit'] || []).map(ac => ac.name).join('');
+      const releases = (rec.releases || []).map(rel => ({
+        id: rel.id,
+        title: rel.title,
+        date: rel.date || '',
+        trackCount: rel['track-count'] || 0,
+        country: rel.country || ''
+      }));
+      return {
+        id: rec.id,
+        title: rec.title,
+        artist,
+        duration: rec.length ? Math.round(rec.length / 1000) : null,
+        releases
+      };
+    });
+    res.json(recordings);
+  } catch (error) {
+    console.error('MusicBrainz search error:', error);
+    res.status(500).json({ error: `Failed to search MusicBrainz: ${error.message}` });
+  }
+});
+
+// Cover Art Archive Image URL Proxy
+app.get('/api/musicbrainz/cover/:releaseId', async (req, res) => {
+  const { releaseId } = req.params;
+  try {
+    const response = await fetch(`https://coverartarchive.org/release/${releaseId}`, {
+      headers: {
+        'User-Agent': 'G00JArchives/1.0.0 ( shido275@github.com )'
+      }
+    });
+    if (response.status === 404) {
+      return res.json({ coverUrl: null });
+    }
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Cover Art Archive error (HTTP ${response.status})` });
+    }
+    const data = await response.json();
+    const frontImage = (data.images || []).find(img => img.front);
+    const coverUrl = frontImage ? (frontImage.thumbnails?.['500'] || frontImage.thumbnails?.large || frontImage.image) : null;
+    res.json({ coverUrl });
+  } catch (error) {
+    console.error('Cover Art Archive error:', error);
+    res.status(500).json({ error: `Failed to fetch cover art metadata: ${error.message}` });
+  }
+});
+
+// Get existing metadata and cover art of an audio file
+app.get('/api/files/:id/metadata', async (req, res) => {
+  try {
+    const file = db.getFile(req.params.id);
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    const filePath = getGitFilePath(file);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Physical file not found on disk' });
+    }
+
+    let parsedTags = {};
+    let coverArtBase64 = null;
+    try {
+      const mmData = await mm.parseFile(filePath);
+      if (mmData && mmData.common) {
+        parsedTags = {
+          title: mmData.common.title || '',
+          artist: mmData.common.artist || '',
+          album: mmData.common.album || '',
+          year: mmData.common.year || '',
+          genre: mmData.common.genre ? mmData.common.genre.join(', ') : '',
+          trackNumber: mmData.common.track && mmData.common.track.no ? String(mmData.common.track.no) : ''
+        };
+        if (mmData.common.picture && mmData.common.picture.length > 0) {
+          const pic = mmData.common.picture[0];
+          coverArtBase64 = `data:${pic.format};base64,${pic.data.toString('base64')}`;
+        }
+      }
+    } catch (err) {
+      console.warn(`Could not read physical tags from ${filePath}:`, err.message);
+    }
+
+    res.json({
+      success: true,
+      fileId: file.id,
+      fileName: file.originalName,
+      tags: {
+        title: file.title || parsedTags.title || '',
+        artist: file.artist || parsedTags.artist || '',
+        album: file.album || parsedTags.album || '',
+        year: file.year || parsedTags.year || '',
+        genre: file.genre || parsedTags.genre || '',
+        trackNumber: file.trackNumber || parsedTags.trackNumber || ''
+      },
+      coverArt: coverArtBase64
+    });
+  } catch (error) {
+    console.error('Get file metadata error:', error);
+    res.status(500).json({ error: `Failed to fetch file metadata: ${error.message}` });
+  }
+});
+
+// Update tags of a file and DB record, sync to git
+app.post('/api/files/:id/tag', async (req, res) => {
+  const { id } = req.params;
+  const { title, artist, album, year, genre, trackNumber, coverArtUrl } = req.body;
+
+  try {
+    const file = db.getFile(id);
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const filePath = getGitFilePath(file);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Physical file not found on disk' });
+    }
+
+    const isMp3 = file.originalName.toLowerCase().endsWith('.mp3');
+
+    if (isMp3) {
+      const tags = {
+        title: title || '',
+        artist: artist || '',
+        album: album || '',
+        year: year ? String(year) : undefined,
+        genre: genre ? String(genre) : undefined,
+        trackNumber: trackNumber ? String(trackNumber) : undefined,
+      };
+
+      let existingTags = {};
+      try {
+        existingTags = NodeID3.read(filePath) || {};
+      } catch (err) {
+        console.warn('Could not read existing ID3 tags:', err.message);
+      }
+
+      if (coverArtUrl) {
+        try {
+          const imgResponse = await fetch(coverArtUrl);
+          if (imgResponse.ok) {
+            const buffer = await imgResponse.arrayBuffer();
+            const contentType = imgResponse.headers.get('content-type') || 'image/jpeg';
+            tags.image = {
+              mime: contentType,
+              type: { id: 3, name: 'front cover' },
+              description: 'Cover Art',
+              imageBuffer: Buffer.from(buffer)
+            };
+          }
+        } catch (err) {
+          console.error('Failed to download cover art:', err.message);
+        }
+      } else if (coverArtUrl === null || coverArtUrl === '') {
+        // Remove image (do not set tags.image)
+      } else if (existingTags.image) {
+        // Retain existing image
+        tags.image = existingTags.image;
+      }
+
+      // Write tags to the physical file
+      const writeSuccess = NodeID3.write(tags, filePath);
+      if (!writeSuccess) {
+        throw new Error('Failed to write ID3 tags to physical file');
+      }
+
+      // Update size in db
+      const stats = fs.statSync(filePath);
+      file.size = stats.size;
+    }
+
+    // Save metadata fields to database file record
+    file.title = title || '';
+    file.artist = artist || '';
+    file.album = album || '';
+    file.year = year || '';
+    file.genre = genre || '';
+    file.trackNumber = trackNumber || '';
+
+    db.saveFile(file);
+
+    // Sync to GitHub clone folder
+    gitSync.queueUpload(file);
+
+    res.json({ success: true, file });
+  } catch (error) {
+    console.error('Write tags error:', error);
+    res.status(500).json({ error: `Failed to write tags to file: ${error.message}` });
+  }
+});
 
 const server = app.listen(PORT, () => {
   console.log(`Backend server running on port ${PORT}`);

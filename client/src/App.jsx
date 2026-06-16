@@ -30,7 +30,8 @@ import {
   Shuffle,
   ChevronUp,
   ChevronDown,
-  ListMusic
+  ListMusic,
+  Tag
 } from 'lucide-react';
 import { ChunkUploader } from './utils/chunkUploader';
 
@@ -79,6 +80,143 @@ function App() {
   const [activePlayerTab, setActivePlayerTab] = useState('queue'); // queue or lyrics
   const [lyricsText, setLyricsText] = useState('');
   const [loadingLyrics, setLoadingLyrics] = useState(false);
+
+  // Audio Tagger states
+  const [taggerFile, setTaggerFile] = useState(null);
+  const [taggerTags, setTaggerTags] = useState({
+    title: '',
+    artist: '',
+    album: '',
+    year: '',
+    genre: '',
+    trackNumber: '',
+    coverArtUrl: ''
+  });
+  const [taggerCoverArt, setTaggerCoverArt] = useState(null); // base64 current
+  const [mbSearchQuery, setMbSearchQuery] = useState('');
+  const [mbResults, setMbResults] = useState([]);
+  const [searchingMb, setSearchingMb] = useState(false);
+  const [selectedMbMatch, setSelectedMbMatch] = useState(null);
+  const [loadingTaggerData, setLoadingTaggerData] = useState(false);
+  const [savingTags, setSavingTags] = useState(false);
+  const [mbCoverUrl, setMbCoverUrl] = useState(null); // cover art of selected match
+  const [fetchingMbCover, setFetchingMbCover] = useState(false);
+
+  const openTagger = async (file) => {
+    setTaggerFile(file);
+    setTaggerTags({
+      title: '',
+      artist: '',
+      album: '',
+      year: '',
+      genre: '',
+      trackNumber: '',
+      coverArtUrl: ''
+    });
+    setTaggerCoverArt(null);
+    setSelectedMbMatch(null);
+    setMbResults([]);
+    setMbCoverUrl(null);
+    
+    const cleanName = file.originalName.replace(/\.[^/.]+$/, "").trim();
+    setMbSearchQuery(cleanName);
+    setLoadingTaggerData(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/api/files/${file.id}/metadata`);
+      if (response.ok) {
+        const data = await response.json();
+        setTaggerTags({
+          title: data.tags.title || '',
+          artist: data.tags.artist || '',
+          album: data.tags.album || '',
+          year: data.tags.year || '',
+          genre: data.tags.genre || '',
+          trackNumber: data.tags.trackNumber || '',
+          coverArtUrl: ''
+        });
+        setTaggerCoverArt(data.coverArt);
+      }
+    } catch (err) {
+      console.error('Failed to fetch file metadata for tagger:', err);
+    } finally {
+      setLoadingTaggerData(false);
+    }
+  };
+
+  const handleMbSearch = async () => {
+    if (!mbSearchQuery.trim()) return;
+    setSearchingMb(true);
+    setSelectedMbMatch(null);
+    setMbCoverUrl(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/musicbrainz/search?q=${encodeURIComponent(mbSearchQuery)}`);
+      if (response.ok) {
+        const data = await response.json();
+        setMbResults(data);
+      }
+    } catch (err) {
+      console.error('MusicBrainz search error:', err);
+    } finally {
+      setSearchingMb(false);
+    }
+  };
+
+  const handleSelectMbMatch = async (match) => {
+    setSelectedMbMatch(match);
+    setMbCoverUrl(null);
+    if (match.releases && match.releases.length > 0) {
+      setFetchingMbCover(true);
+      try {
+        const release = match.releases[0];
+        const res = await fetch(`${API_BASE}/api/musicbrainz/cover/${release.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          setMbCoverUrl(data.coverUrl);
+        }
+      } catch (err) {
+        console.error('Cover art fetch error:', err);
+      } finally {
+        setFetchingMbCover(false);
+      }
+    }
+  };
+
+  const applyMbMatch = () => {
+    if (!selectedMbMatch) return;
+    const release = selectedMbMatch.releases?.[0] || {};
+    setTaggerTags(prev => ({
+      ...prev,
+      title: selectedMbMatch.title || prev.title,
+      artist: selectedMbMatch.artist || prev.artist,
+      album: release.title || prev.album,
+      year: release.date ? release.date.substring(0, 4) : prev.year,
+      coverArtUrl: mbCoverUrl || prev.coverArtUrl
+    }));
+  };
+
+  const handleSaveTags = async () => {
+    setSavingTags(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/files/${taggerFile.id}/tag`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taggerTags)
+      });
+      if (response.ok) {
+        fetchFiles();
+        setTaggerFile(null);
+      } else {
+        const data = await response.json();
+        alert(data.error || 'Failed to save tags.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error updating file tags.');
+    } finally {
+      setSavingTags(false);
+    }
+  };
 
   const fetchLyrics = async (trackName) => {
     setLoadingLyrics(true);
@@ -973,7 +1111,7 @@ function App() {
                   </div>
                   <div className="file-card-info">
                     <span className="file-name" title={file.originalName}>
-                      {file.originalName}
+                      {file.title && file.artist ? `${file.artist} - ${file.title}` : file.originalName}
                       {activeAudioTrack?.id === file.id && (
                         <div className={`ytm-equalizer ${isPlaying ? '' : 'paused'}`}>
                           <div className="ytm-equalizer-bar"></div>
@@ -995,6 +1133,16 @@ function App() {
                     >
                       <Eye size={14} />
                     </button>
+                    {file.category === 'audio' && (
+                      <button 
+                        className="file-action-btn"
+                        onClick={(e) => { e.stopPropagation(); openTagger(file); }}
+                        title="Edit Tags / Tagger"
+                        style={{ color: 'var(--accent-indigo)' }}
+                      >
+                        <Tag size={14} />
+                      </button>
+                    )}
                     <button 
                       className="file-action-btn"
                       onClick={(e) => handleDownload(e, file)}
@@ -1074,7 +1222,7 @@ function App() {
                             {getCategoryIcon(file.category, 18)}
                           </div>
                           <span className="list-file-name-text" title={file.originalName}>
-                            {file.originalName}
+                            {file.title && file.artist ? `${file.artist} - ${file.title}` : file.originalName}
                             {activeAudioTrack?.id === file.id && (
                               <div className={`ytm-equalizer ${isPlaying ? '' : 'paused'}`}>
                                 <div className="ytm-equalizer-bar"></div>
@@ -1096,6 +1244,16 @@ function App() {
                           >
                             <Eye size={14} />
                           </button>
+                          {file.category === 'audio' && (
+                            <button 
+                              className="file-action-btn"
+                              onClick={() => openTagger(file)}
+                              title="Edit Tags / Tagger"
+                              style={{ color: 'var(--accent-indigo)' }}
+                            >
+                              <Tag size={14} />
+                            </button>
+                          )}
                           <button 
                             className="file-action-btn"
                             onClick={(e) => handleDownload(e, file)}
@@ -1516,6 +1674,262 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* Audio Tagger Modal */}
+        {taggerFile && (
+          <div className="modal-overlay" onClick={() => setTaggerFile(null)}>
+            <div 
+              className="modal-container glass-panel" 
+              style={{ maxWidth: '900px', width: '90%' }} 
+              onClick={(e) => e.stopPropagation()}
+            >
+              <header className="modal-header">
+                <span className="modal-title-text">Audio Tagger & MusicBrainz Matcher</span>
+                <button className="modal-close-btn" onClick={() => setTaggerFile(null)}>
+                  <X size={18} />
+                </button>
+              </header>
+
+              {loadingTaggerData ? (
+                <div className="empty-state" style={{ padding: '60px' }}>
+                  <RefreshCw className="empty-icon spin" style={{ animation: 'spin 1.5s linear infinite' }} size={36} />
+                  <p>Reading audio metadata from file...</p>
+                </div>
+              ) : (
+                <div className="ytm-tagger-layout">
+                  {/* Left Panel: Current & Form Tags */}
+                  <div className="ytm-tagger-column">
+                    <h3 className="ytm-tagger-section-title">Edit Metadata</h3>
+                    
+                    <div className="ytm-tagger-form">
+                      <div className="ytm-tagger-row">
+                        <label className="ytm-tagger-label">Title</label>
+                        <input 
+                          type="text" 
+                          className="ytm-tagger-input"
+                          value={taggerTags.title}
+                          onChange={(e) => setTaggerTags(prev => ({ ...prev, title: e.target.value }))}
+                          placeholder="e.g. Blinding Lights"
+                        />
+                      </div>
+
+                      <div className="ytm-tagger-row">
+                        <label className="ytm-tagger-label">Artist</label>
+                        <input 
+                          type="text" 
+                          className="ytm-tagger-input"
+                          value={taggerTags.artist}
+                          onChange={(e) => setTaggerTags(prev => ({ ...prev, artist: e.target.value }))}
+                          placeholder="e.g. The Weeknd"
+                        />
+                      </div>
+
+                      <div className="ytm-tagger-row">
+                        <label className="ytm-tagger-label">Album</label>
+                        <input 
+                          type="text" 
+                          className="ytm-tagger-input"
+                          value={taggerTags.album}
+                          onChange={(e) => setTaggerTags(prev => ({ ...prev, album: e.target.value }))}
+                          placeholder="e.g. After Hours"
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '12px' }}>
+                        <div className="ytm-tagger-row" style={{ flex: 1 }}>
+                          <label className="ytm-tagger-label">Year</label>
+                          <input 
+                            type="text" 
+                            className="ytm-tagger-input"
+                            value={taggerTags.year}
+                            onChange={(e) => setTaggerTags(prev => ({ ...prev, year: e.target.value }))}
+                            placeholder="e.g. 2020"
+                          />
+                        </div>
+                        <div className="ytm-tagger-row" style={{ flex: 1 }}>
+                          <label className="ytm-tagger-label">Track #</label>
+                          <input 
+                            type="text" 
+                            className="ytm-tagger-input"
+                            value={taggerTags.trackNumber}
+                            onChange={(e) => setTaggerTags(prev => ({ ...prev, trackNumber: e.target.value }))}
+                            placeholder="e.g. 1"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="ytm-tagger-row">
+                        <label className="ytm-tagger-label">Genre</label>
+                        <input 
+                          type="text" 
+                          className="ytm-tagger-input"
+                          value={taggerTags.genre}
+                          onChange={(e) => setTaggerTags(prev => ({ ...prev, genre: e.target.value }))}
+                          placeholder="e.g. Pop"
+                        />
+                      </div>
+
+                      <div className="ytm-tagger-row">
+                        <label className="ytm-tagger-label">Cover Art URL</label>
+                        <input 
+                          type="text" 
+                          className="ytm-tagger-input"
+                          value={taggerTags.coverArtUrl}
+                          onChange={(e) => setTaggerTags(prev => ({ ...prev, coverArtUrl: e.target.value }))}
+                          placeholder="Paste cover image URL..."
+                        />
+                      </div>
+                    </div>
+
+                    <div className="ytm-tagger-artwork-block">
+                      <div className="ytm-tagger-artwork-container">
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Current Tag Cover</span>
+                        {taggerCoverArt ? (
+                          <img src={taggerCoverArt} alt="Current Cover Art" className="ytm-tagger-cover-preview" />
+                        ) : (
+                          <div className="ytm-tagger-cover-placeholder">
+                            <Music size={24} style={{ opacity: 0.3 }} />
+                            <span>No Embedded Art</span>
+                          </div>
+                        )}
+                      </div>
+                      
+                      {taggerTags.coverArtUrl && (
+                        <div className="ytm-tagger-artwork-container">
+                          <span style={{ fontSize: '0.75rem', color: 'var(--accent-indigo)' }}>New Match Cover</span>
+                          <img src={taggerTags.coverArtUrl} alt="New Cover Art Match" className="ytm-tagger-cover-preview matched" />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right Panel: MusicBrainz Integration */}
+                  <div className="ytm-tagger-column mb-panel">
+                    <h3 className="ytm-tagger-section-title">MusicBrainz Search</h3>
+                    
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                      <input 
+                        type="text" 
+                        className="search-input"
+                        style={{ paddingLeft: '16px', height: '38px' }}
+                        value={mbSearchQuery}
+                        onChange={(e) => setMbSearchQuery(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleMbSearch(); }}
+                        placeholder="Search recording or artist..."
+                      />
+                      <button 
+                        className="glow-btn modal-btn btn-action" 
+                        onClick={handleMbSearch}
+                        disabled={searchingMb}
+                        style={{ margin: 0, padding: '0 16px', height: '38px', whiteSpace: 'nowrap' }}
+                      >
+                        {searchingMb ? 'Searching...' : 'Search'}
+                      </button>
+                    </div>
+
+                    <div className="ytm-mb-results-wrapper">
+                      {searchingMb && (
+                        <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
+                          <RefreshCw className="spin" style={{ animation: 'spin 1.5s linear infinite', margin: '0 auto 8px auto' }} size={20} />
+                          <span>Contacting MusicBrainz...</span>
+                        </div>
+                      )}
+                      
+                      {!searchingMb && mbResults.length === 0 && (
+                        <div style={{ textAlign: 'center', padding: '32px 16px', border: '1px dashed var(--glass-border)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
+                          Search MusicBrainz database above to fetch correct tags!
+                        </div>
+                      )}
+
+                      {!searchingMb && mbResults.length > 0 && (
+                        <div className="ytm-mb-results-list">
+                          {mbResults.map(res => (
+                            <div 
+                              key={res.id} 
+                              className={`ytm-mb-result-item ${selectedMbMatch?.id === res.id ? 'active' : ''}`}
+                              onClick={() => handleSelectMbMatch(res)}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600 }}>
+                                <span className="title" style={{ color: '#fff' }}>{res.title}</span>
+                                {res.duration && <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{formatTime(res.duration)}</span>}
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                <span>Artist: <strong>{res.artist || 'Unknown'}</strong></span>
+                              </div>
+                              {res.releases && res.releases.length > 0 && (
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  Album: {res.releases[0].title} {res.releases[0].date && `(${res.releases[0].date.substring(0,4)})`}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Match Comparison Block */}
+                    {selectedMbMatch && (
+                      <div className="ytm-mb-comparison glass-panel">
+                        <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+                          <div style={{ flexGrow: 1 }}>
+                            <h4 style={{ color: 'var(--accent-indigo)', fontSize: '0.85rem', fontWeight: 700, marginBottom: '6px' }}>Selected Match Details</h4>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.75rem' }}>
+                              <span><strong>Title:</strong> {selectedMbMatch.title}</span>
+                              <span><strong>Artist:</strong> {selectedMbMatch.artist}</span>
+                              {selectedMbMatch.releases && selectedMbMatch.releases.length > 0 && (
+                                <>
+                                  <span><strong>Album:</strong> {selectedMbMatch.releases[0].title}</span>
+                                  <span><strong>Year:</strong> {selectedMbMatch.releases[0].date || 'Unknown'}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {fetchingMbCover ? (
+                            <div className="comparison-cover-placeholder">
+                              <RefreshCw className="spin" size={14} style={{ animation: 'spin 1.5s linear' }} />
+                            </div>
+                          ) : mbCoverUrl ? (
+                            <img src={mbCoverUrl} alt="Match Cover" className="comparison-cover-art" />
+                          ) : (
+                            <div className="comparison-cover-placeholder">
+                              <Music size={14} style={{ opacity: 0.3 }} />
+                            </div>
+                          )}
+                        </div>
+
+                        <button 
+                          className="glow-btn match-apply-btn"
+                          onClick={applyMbMatch}
+                        >
+                          Pull Matched Metadata
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <footer className="modal-footer">
+                {!taggerFile?.originalName.toLowerCase().endsWith('.mp3') && (
+                  <span style={{ marginRight: 'auto', fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                    * Non-MP3 files: database only metadata edit (physical tagging disabled)
+                  </span>
+                )}
+                <button className="modal-btn" onClick={() => setTaggerFile(null)}>
+                  Cancel
+                </button>
+                <button 
+                  className="modal-btn btn-action" 
+                  onClick={handleSaveTags}
+                  disabled={savingTags || loadingTaggerData}
+                >
+                  {savingTags ? 'Writing Tags...' : 'Save & Tag File'}
+                </button>
+              </footer>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Persistent Bottom YouTube Music Player Bar */}
@@ -1536,11 +1950,11 @@ function App() {
               <Music size={20} />
             </div>
             <div className="ytm-track-meta">
-              <span className="ytm-track-title" title={activeAudioTrack.originalName}>
-                {activeAudioTrack.originalName}
+              <span className="ytm-track-title" title={activeAudioTrack.title || activeAudioTrack.originalName}>
+                {activeAudioTrack.title || activeAudioTrack.originalName}
               </span>
               <span className="ytm-track-desc">
-                {formatBytes(activeAudioTrack.size)} • Audio
+                {activeAudioTrack.artist ? `${activeAudioTrack.artist} • ` : ''}{formatBytes(activeAudioTrack.size)} • Audio
               </span>
             </div>
           </div>
@@ -1660,11 +2074,11 @@ function App() {
               </div>
               
               <div className="ytm-expanded-meta">
-                <span className="ytm-expanded-title" title={activeAudioTrack.originalName}>
-                  {activeAudioTrack.originalName}
+                <span className="ytm-expanded-title" title={activeAudioTrack.title || activeAudioTrack.originalName}>
+                  {activeAudioTrack.title || activeAudioTrack.originalName}
                 </span>
                 <span className="ytm-expanded-artist">
-                  {formatBytes(activeAudioTrack.size)} • G00J Archives
+                  {activeAudioTrack.artist ? `${activeAudioTrack.artist} • ` : ''}{formatBytes(activeAudioTrack.size)} • G00J Archives
                 </span>
               </div>
 
