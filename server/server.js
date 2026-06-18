@@ -9,8 +9,10 @@ import mime from 'mime-types';
 import NodeID3 from 'node-id3';
 import * as mm from 'music-metadata';
 import AdmZip from 'adm-zip';
+import crypto from 'crypto';
 import { db } from './db.js';
 import { gitSync, getFolderHierarchyPath } from './gitSync.js';
+global.triggerDbSync = () => gitSync.queueDbSync();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,6 +22,227 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// --- Authentication & Session Management ---
+const sessions = new Map(); // token -> { userId, username, role, expiresAt }
+
+function seedAdminUser() {
+  try {
+    const adminUsername = 'maoriboishido';
+    const existingAdmin = db.getUserByUsername(adminUsername);
+    if (!existingAdmin) {
+      const salt = crypto.randomBytes(16).toString('hex');
+      const passwordHash = crypto.createHash('sha256').update("DanteRK5405" + salt).digest('hex');
+      
+      const adminUser = {
+        id: uuidv4(),
+        username: adminUsername,
+        passwordHash: passwordHash,
+        salt: salt,
+        role: 'admin',
+        createdDate: new Date().toISOString()
+      };
+      db.saveUser(adminUser);
+      console.log('[Auth] Seeded default admin user: maoriboishido');
+    }
+  } catch (err) {
+    console.error('[Auth] Failed to seed admin user:', err);
+  }
+}
+
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  const session = sessions.get(token);
+  if (!session || session.expiresAt < Date.now()) {
+    if (session) sessions.delete(token); // clean up expired
+    return res.status(401).json({ error: 'Session expired or invalid' });
+  }
+
+  req.user = session;
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin privileges required' });
+  }
+  next();
+}
+
+// Authentication Endpoints
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Missing username or password' });
+    }
+
+    const user = db.getUserByUsername(username);
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const hash = crypto.createHash('sha256').update(password + user.salt).digest('hex');
+    if (hash !== user.passwordHash) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const session = {
+      userId: user.id,
+      username: user.username,
+      role: user.role,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+    };
+    sessions.set(token, session);
+
+    res.json({ token, user: { username: user.username, role: user.role } });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Internal server error during login' });
+  }
+});
+
+app.get('/api/auth/me', authenticateToken, (req, res) => {
+  res.json({ username: req.user.username, role: req.user.role });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (token) {
+    sessions.delete(token);
+  }
+  res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// Admin User Management Endpoints
+app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const users = db.getUsers().map(u => ({
+      id: u.id,
+      username: u.username,
+      role: u.role,
+      createdDate: u.createdDate
+    }));
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+app.post('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const { username, password, role } = req.body;
+    if (!username || !password || !role) {
+      return res.status(400).json({ error: 'Missing username, password, or role' });
+    }
+
+    const existing = db.getUserByUsername(username);
+    if (existing) {
+      return res.status(400).json({ error: 'Username already exists' });
+    }
+
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = crypto.createHash('sha256').update(password + salt).digest('hex');
+
+    const newUser = {
+      id: uuidv4(),
+      username,
+      passwordHash,
+      salt,
+      role,
+      createdDate: new Date().toISOString()
+    };
+
+    db.saveUser(newUser);
+    res.json({ success: true, user: { id: newUser.id, username: newUser.username, role: newUser.role, createdDate: newUser.createdDate } });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create user' });
+  }
+});
+
+app.put('/api/admin/users/:id/password', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ error: 'Missing password' });
+    }
+
+    const user = db.getUser(req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = crypto.createHash('sha256').update(password + salt).digest('hex');
+
+    const updatedUser = {
+      ...user,
+      salt,
+      passwordHash
+    };
+
+    db.saveUser(updatedUser);
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update password' });
+  }
+});
+
+app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const user = db.getUser(req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.username === 'maoriboishido') {
+      return res.status(400).json({ error: 'Cannot delete the master admin account' });
+    }
+
+    db.deleteUser(req.params.id);
+    res.json({ success: true, message: 'User deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
+// Paths that bypass standard session authentication (public downloads/sharing info)
+const PUBLIC_PATHS = [
+  /^\/api\/auth\/login$/,
+  /^\/api\/files\/[a-f0-9-]+(?:\.[a-z0-9]+)?$/,
+  /^\/api\/folders\/[a-f0-9-]+$/,
+  /^\/api\/files\/download\/[a-f0-9-]+(?:\.[a-z0-9]+)?$/
+];
+
+// Global Auth Filter Middleware
+app.use((req, res, next) => {
+  if (req.path === '/api/auth/login' && req.method === 'POST') {
+    return next();
+  }
+  // Guest folder share access: bypass auth on GET /api/files if folderId is provided
+  if (req.path === '/api/files' && req.method === 'GET' && req.query.folderId) {
+    return next();
+  }
+  const isPublic = PUBLIC_PATHS.some(regex => regex.test(req.path));
+  if (isPublic && req.method === 'GET') {
+    return next();
+  }
+
+  // Allow bypass for internal test routes
+  if (req.path.startsWith('/api/test-')) {
+    return next();
+  }
+
+  authenticateToken(req, res, next);
+});
 
 // Set up storage directories
 const DATA_DIR = path.join(__dirname, 'data');
@@ -32,7 +255,7 @@ if (!fs.existsSync(TEMP_DIR)) {
 
 // Helper to resolve the direct path inside local Git repository clone
 function getGitFilePath(file) {
-  const folderPath = getFolderHierarchyPath(file.folderId);
+  const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
   return path.join(GIT_REPO_DIR, folderPath, file.originalName);
 }
 
@@ -54,7 +277,7 @@ function getCategory(mimeType) {
   if (mainType === 'image') return 'images';
   if (mainType === 'video') return 'videos';
   if (mainType === 'audio') return 'audio';
-  
+
   const docs = [
     'application/pdf',
     'application/msword',
@@ -91,7 +314,7 @@ function getCategory(mimeType) {
 app.post('/api/upload/init', (req, res) => {
   try {
     const { fileName, fileSize, fileType, totalChunks, uploadId: clientUploadId } = req.body;
-    
+
     if (!fileName || !fileSize || !totalChunks) {
       return res.status(400).json({ error: 'Missing required initialization details' });
     }
@@ -99,7 +322,7 @@ app.post('/api/upload/init', (req, res) => {
     // Reuse uploadId if resuming, or generate new
     const uploadId = clientUploadId || uuidv4();
     const chunkDir = path.join(TEMP_DIR, uploadId);
-    
+
     let chunkIdsUploaded = [];
     if (fs.existsSync(chunkDir)) {
       const files = fs.readdirSync(chunkDir);
@@ -146,7 +369,7 @@ app.post('/api/upload/chunk', upload.single('chunk'), (req, res) => {
     if (req.file && fs.existsSync(req.file.path)) {
       try {
         fs.unlinkSync(req.file.path);
-      } catch (err) {}
+      } catch (err) { }
     }
     res.status(500).json({ error: 'Failed to save chunk' });
   }
@@ -161,7 +384,7 @@ app.post('/api/upload/complete', async (req, res) => {
 
   const chunkDir = path.join(TEMP_DIR, uploadId);
   const fileId = uuidv4() + path.extname(fileName);
-  const folderPath = getFolderHierarchyPath(folderId);
+  const folderPath = getFolderHierarchyPath(folderId, req.user.username);
   const destDir = path.join(GIT_REPO_DIR, folderPath);
   fs.mkdirSync(destDir, { recursive: true });
   const finalPath = path.join(destDir, fileName);
@@ -178,7 +401,7 @@ app.post('/api/upload/complete', async (req, res) => {
       if (!fs.existsSync(chunkPath)) {
         throw new Error(`Chunk ${i} is missing`);
       }
-      
+
       await new Promise((resolve, reject) => {
         const readStream = fs.createReadStream(chunkPath);
         readStream.pipe(writeStream, { end: false });
@@ -214,7 +437,8 @@ app.post('/api/upload/complete', async (req, res) => {
       mimeType: resolvedMime,
       category,
       uploadDate: new Date().toISOString(),
-      folderId: folderId || null
+      folderId: folderId || null,
+      ownerUsername: req.user.username
     };
 
     db.saveFile(newFile);
@@ -236,6 +460,14 @@ app.get('/api/files', (req, res) => {
   try {
     const { category, search, folderId } = req.query;
     let files = db.getFiles();
+
+    if (req.user) {
+      files = files.filter(f => f.ownerUsername === req.user.username);
+    } else if (folderId) {
+      files = files.filter(f => f.folderId === folderId);
+    } else {
+      files = [];
+    }
 
     if (category && category !== 'all') {
       files = files.filter(f => f.category === category);
@@ -264,14 +496,24 @@ app.get('/api/folders', (req, res) => {
   try {
     const { parentId, all } = req.query;
     let folders = db.getFolders();
-    
-    if (all === 'true') {
-      return res.json(folders);
+
+    if (req.user) {
+      folders = folders.filter(f => f.ownerUsername === req.user.username);
+    } else if (parentId) {
+      folders = folders.filter(f => f.parentId === parentId);
+    } else {
+      folders = [];
     }
-    
+
+    if (all === 'true' && req.user) {
+      return res.json(folders);
+    } else if (all === 'true') {
+      return res.json([]);
+    }
+
     const targetParentId = parentId === 'root' || !parentId ? null : parentId;
     folders = folders.filter(f => f.parentId === targetParentId);
-    
+
     res.json(folders);
   } catch (error) {
     console.error('List folders error:', error);
@@ -292,7 +534,8 @@ app.post('/api/folders', (req, res) => {
       id: uuidv4(),
       name,
       parentId: targetParentId,
-      createdDate: new Date().toISOString()
+      createdDate: new Date().toISOString(),
+      ownerUsername: req.user.username
     };
 
     db.saveFolder(newFolder);
@@ -307,7 +550,7 @@ app.post('/api/folders', (req, res) => {
 function deleteFolderRecursive(folderId) {
   const allFolders = db.getFolders();
   const subfolders = allFolders.filter(f => f.parentId === folderId);
-  
+
   // 1. Recursive delete contents of nested subfolders
   for (const sub of subfolders) {
     deleteFolderRecursive(sub.id);
@@ -316,7 +559,7 @@ function deleteFolderRecursive(folderId) {
   // 2. Delete files directly residing in this folder
   const allFiles = db.getFiles();
   const filesInFolder = allFiles.filter(f => f.folderId === folderId);
-  
+
   for (const file of filesInFolder) {
     const filePath = getGitFilePath(file);
     if (fs.existsSync(filePath)) {
@@ -326,7 +569,7 @@ function deleteFolderRecursive(folderId) {
         console.error(`Failed to physically delete file ${filePath}:`, err);
       }
     }
-    
+
     // Clean up temporary chunks folder if any exist
     const tempDir = path.join(TEMP_DIR, file.id);
     if (fs.existsSync(tempDir)) {
@@ -348,6 +591,9 @@ app.delete('/api/folders/:id', (req, res) => {
     const folder = db.getFolder(id);
     if (!folder) {
       return res.status(404).json({ error: 'Folder not found' });
+    }
+    if (folder.ownerUsername !== req.user.username) {
+      return res.status(403).json({ error: 'Unauthorized to delete this folder' });
     }
 
     deleteFolderRecursive(id);
@@ -453,6 +699,9 @@ app.delete('/api/files/:id', (req, res) => {
     if (!file) {
       return res.status(404).json({ error: 'File not found' });
     }
+    if (file.ownerUsername !== req.user.username) {
+      return res.status(403).json({ error: 'Unauthorized to delete this file' });
+    }
 
     const filePath = getGitFilePath(file);
     if (fs.existsSync(filePath)) {
@@ -501,7 +750,7 @@ function getScrapedLinkDetails(linkUrl, baseUrl, isParentTrusted = false) {
     const parsedUrl = new URL(absoluteUrl);
     const pathname = parsedUrl.pathname;
     const fileName = path.basename(pathname) || 'downloaded-file';
-    
+
     // If the path ends with a slash, it's a directory, not a downloadable file
     if (pathname.endsWith('/')) {
       return null;
@@ -553,7 +802,7 @@ async function subScrapeTrustedPage(url, seenUrls) {
 
     const response = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
-    
+
     if (!response.ok) return subDownloads;
     const html = await response.text();
 
@@ -588,18 +837,18 @@ function isSubdirectoryUrl(linkUrl, baseUrl) {
   try {
     const parent = new URL(baseUrl);
     const child = new URL(linkUrl);
-    
+
     // Host must match exactly
     if (parent.hostname !== child.hostname) {
       return false;
     }
-    
+
     // Must be a descendant of the parent path
     const parentPath = parent.pathname.endsWith('/') ? parent.pathname : parent.pathname + '/';
     if (!child.pathname.startsWith(parentPath)) {
       return false;
     }
-    
+
     // Ignore parent directories (contains '..')
     if (child.pathname.includes('..')) {
       return false;
@@ -617,7 +866,7 @@ function isSubdirectoryUrl(linkUrl, baseUrl) {
     }
     const fileName = path.basename(cleanPath) || '';
     const ext = path.extname(fileName).toLowerCase();
-    
+
     const isRealExtension = ext.length > 1 && !/^\.\d+$/.test(ext) && ext !== '.html';
     if (isRealExtension) {
       return false;
@@ -636,14 +885,14 @@ async function scrapeAllPageDownloads(pageUrl) {
   const seenUrls = new Set();
   const visitedDirs = new Set();
   const trustedPagesToScrape = [];
-  
+
   visitedDirs.add(pageUrl);
   seenUrls.add(pageUrl);
 
   const maxDepth = 10;
   const maxDirsToCrawl = 1000;
   const maxFilesToDiscover = 2000;
-  
+
   const queue = [{ url: pageUrl, depth: 0 }];
   let crawledDirsCount = 0;
   let resolvedBaseUrl = pageUrl;
@@ -653,9 +902,9 @@ async function scrapeAllPageDownloads(pageUrl) {
   const activeFetches = new Set();
 
   while ((queue.length > 0 || activeFetches.size > 0) &&
-         crawledDirsCount < maxDirsToCrawl &&
-         safeDownloads.length < maxFilesToDiscover) {
-    
+    crawledDirsCount < maxDirsToCrawl &&
+    safeDownloads.length < maxFilesToDiscover) {
+
     if (queue.length > 0 && activeFetches.size < CONCURRENCY) {
       const current = queue.shift();
       const currentUrl = current.url;
@@ -670,7 +919,7 @@ async function scrapeAllPageDownloads(pageUrl) {
 
           const response = await fetch(currentUrl, { signal: controller.signal });
           clearTimeout(timeout);
-          
+
           if (!response.ok) return;
 
           // If this is the initial base URL fetch, update resolvedBaseUrl to handle mirror redirects
@@ -687,7 +936,7 @@ async function scrapeAllPageDownloads(pageUrl) {
           const actionRegex = /action=["'](https?:\/\/[^"']+|[^"']+)["']/gi;
           const dataUrlRegex = /data-(?:href|url|link)=["'](https?:\/\/[^"']+|[^"']+)["']/gi;
           const onclickRegex = /(?:window\.)?(?:location\.)?(?:href|assign|replace)\s*[(=\s]+["'](https?:\/\/[^"']+|[^"']+)["']/gi;
-          
+
           const rawLinks = new Set();
           let match;
           while ((match = hrefRegex.exec(html)) !== null) rawLinks.add(match[1]);
@@ -701,7 +950,7 @@ async function scrapeAllPageDownloads(pageUrl) {
             try {
               const absoluteUrl = new URL(link, currentUrl).href;
               const details = getScrapedLinkDetails(absoluteUrl, currentUrl, false);
-              
+
               if (details) {
                 if (!seenUrls.has(details.url)) {
                   seenUrls.add(details.url);
@@ -728,7 +977,7 @@ async function scrapeAllPageDownloads(pageUrl) {
                   }
                 }
               }
-            } catch (err) {}
+            } catch (err) { }
           }
         } catch (err) {
           console.error(`[Scraper] Failed to fetch directory page ${currentUrl}:`, err.message);
@@ -801,7 +1050,7 @@ app.post('/api/scrape/download', async (req, res) => {
     const fileId = uuidv4() + path.extname(fileName);
     const resolvedMime = remoteResponse.headers.get('content-type') || mime.lookup(fileName) || 'application/octet-stream';
     const category = getCategory(resolvedMime);
-    const folderPath = getFolderHierarchyPath(folderId);
+    const folderPath = getFolderHierarchyPath(folderId, req.user.username);
     const destDir = path.join(GIT_REPO_DIR, folderPath);
     fs.mkdirSync(destDir, { recursive: true });
     const targetPath = path.join(destDir, fileName);
@@ -812,7 +1061,7 @@ app.post('/api/scrape/download', async (req, res) => {
     await new Promise(async (resolve, reject) => {
       writer.on('finish', resolve);
       writer.on('error', reject);
-      
+
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -829,7 +1078,7 @@ app.post('/api/scrape/download', async (req, res) => {
     });
 
     const stats = fs.statSync(targetPath);
-    
+
     const newFile = {
       id: fileId,
       originalName: fileName,
@@ -838,7 +1087,8 @@ app.post('/api/scrape/download', async (req, res) => {
       mimeType: resolvedMime,
       category,
       uploadDate: new Date().toISOString(),
-      folderId: folderId === 'root' || !folderId ? null : folderId
+      folderId: folderId === 'root' || !folderId ? null : folderId,
+      ownerUsername: req.user.username
     };
 
     db.saveFile(newFile);
@@ -853,7 +1103,8 @@ app.post('/api/scrape/download', async (req, res) => {
 // Get all scraping jobs
 app.get('/api/scraper/jobs', (req, res) => {
   try {
-    res.json(db.getJobs());
+    const jobs = db.getJobs().filter(j => j.ownerUsername === req.user.username);
+    res.json(jobs);
   } catch (error) {
     console.error('Get jobs error:', error);
     res.status(500).json({ error: 'Failed to fetch scraper jobs' });
@@ -880,7 +1131,8 @@ app.post('/api/scraper/jobs', (req, res) => {
       active: active !== undefined ? active : true,
       lastRun: existingJob ? existingJob.lastRun : null,
       nextRun: existingJob ? existingJob.nextRun : null,
-      downloadedUrls: existingJob ? (existingJob.downloadedUrls || []) : []
+      downloadedUrls: existingJob ? (existingJob.downloadedUrls || []) : [],
+      ownerUsername: req.user.username
     };
 
     if (!existingJob) {
@@ -900,6 +1152,13 @@ app.post('/api/scraper/jobs', (req, res) => {
 app.delete('/api/scraper/jobs/:id', (req, res) => {
   try {
     const { id } = req.params;
+    const job = db.getJob(id);
+    if (!job) {
+      return res.status(404).json({ error: 'Scraper job not found' });
+    }
+    if (job.ownerUsername !== req.user.username) {
+      return res.status(403).json({ error: 'Unauthorized to delete this job' });
+    }
     const deleted = db.deleteJob(id);
     if (!deleted) {
       return res.status(404).json({ error: 'Scraper job not found' });
@@ -1093,7 +1352,7 @@ async function runScraperDownload(job) {
         const fileId = uuidv4() + path.extname(fileName);
         const resolvedMime = remoteResponse.headers.get('content-type') || mime.lookup(fileName) || 'application/octet-stream';
         const category = getCategory(resolvedMime);
-        const folderPath = getFolderHierarchyPath(job.folderId);
+        const folderPath = getFolderHierarchyPath(job.folderId, job.ownerUsername);
         const destDir = path.join(GIT_REPO_DIR, folderPath);
         fs.mkdirSync(destDir, { recursive: true });
         const targetPath = path.join(destDir, fileName);
@@ -1128,7 +1387,8 @@ async function runScraperDownload(job) {
           mimeType: resolvedMime,
           category,
           uploadDate: new Date().toISOString(),
-          folderId: job.folderId
+          folderId: job.folderId,
+          ownerUsername: job.ownerUsername
         };
 
         db.saveFile(newFile);
@@ -1153,13 +1413,13 @@ async function processScraperJobs() {
 
     for (const job of activeJobs) {
       let shouldRun = false;
-      
+
       if (!job.lastRun) {
         shouldRun = true;
       } else {
         const lastRunDate = new Date(job.lastRun);
         const timeDiff = now.getTime() - lastRunDate.getTime();
-        
+
         if (job.schedule === 'once') {
           shouldRun = false; // already ran once
         } else if (job.schedule === 'weekly') {
@@ -1173,7 +1433,7 @@ async function processScraperJobs() {
 
       if (shouldRun) {
         console.log(`[Scheduler] Running scraper job: ${job.id} for ${job.url}`);
-        
+
         // Update next run dates
         let nextRun = null;
         if (job.schedule === 'weekly') {
@@ -1217,7 +1477,7 @@ app.get('/api/musicbrainz/search', async (req, res) => {
       return res.status(response.status).json({ error: `MusicBrainz API error (HTTP ${response.status})` });
     }
     const data = await response.json();
-    
+
     // Map to a clean, easy-to-use structure for the client
     const recordings = (data.recordings || []).map(rec => {
       const artist = (rec['artist-credit'] || []).map(ac => ac.name).join('');
@@ -1335,7 +1595,7 @@ app.get('/api/files/:id/metadata', async (req, res) => {
 // Update tags of a file and DB record, sync to git
 app.post('/api/files/:id/tag', async (req, res) => {
   const { id } = req.params;
-  const { 
+  const {
     title, artist, album, year, genre, trackNumber, coverArtUrl,
     albumArtist, composer, publisher, bpm, discNumber, comment
   } = req.body;
@@ -1344,6 +1604,9 @@ app.post('/api/files/:id/tag', async (req, res) => {
     const file = db.getFile(id);
     if (!file) {
       return res.status(404).json({ error: 'File not found' });
+    }
+    if (file.ownerUsername !== req.user.username) {
+      return res.status(403).json({ error: 'Unauthorized to edit tags on this file' });
     }
 
     const filePath = getGitFilePath(file);
@@ -1540,9 +1803,92 @@ Generated On: ${new Date().toISOString()}
   }
 });
 
-const server = app.listen(PORT, () => {
+// Save edited image (overwrite or save as copy)
+app.post('/api/files/:id/edit', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { fileName, imageData, saveAsCopy } = req.body;
+
+    if (!imageData) {
+      return res.status(400).json({ error: 'Missing image data' });
+    }
+
+    const file = db.getFile(id);
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    if (file.ownerUsername !== req.user.username) {
+      return res.status(403).json({ error: 'Unauthorized to edit this file' });
+    }
+
+    // Decode base64 image data (e.g. data:image/png;base64,...)
+    const matches = imageData.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    if (!matches || matches.length !== 3) {
+      return res.status(400).json({ error: 'Invalid image data uri format' });
+    }
+
+    const mimeType = matches[1];
+    const buffer = Buffer.from(matches[2], 'base64');
+
+    const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
+    const destDir = path.join(GIT_REPO_DIR, folderPath);
+    fs.mkdirSync(destDir, { recursive: true });
+
+    let savedFile;
+    if (saveAsCopy === true) {
+      // Create new file copy
+      const newFileId = uuidv4() + path.extname(fileName);
+      const destFilePath = path.join(destDir, fileName);
+
+      fs.writeFileSync(destFilePath, buffer);
+      const stats = fs.statSync(destFilePath);
+
+      savedFile = {
+        id: newFileId,
+        originalName: fileName,
+        savedName: newFileId,
+        size: stats.size,
+        mimeType: mimeType,
+        category: 'images',
+        uploadDate: new Date().toISOString(),
+        folderId: file.folderId,
+        ownerUsername: req.user.username
+      };
+
+      db.saveFile(savedFile);
+      gitSync.queueUpload(savedFile);
+      console.log(`[Image Editor] Saved edited file copy: ${fileName}`);
+    } else {
+      // Overwrite original file
+      const destFilePath = path.join(destDir, file.originalName);
+      
+      fs.writeFileSync(destFilePath, buffer);
+      const stats = fs.statSync(destFilePath);
+
+      // Update database record
+      savedFile = {
+        ...file,
+        size: stats.size,
+        mimeType: mimeType,
+        uploadDate: new Date().toISOString()
+      };
+
+      db.saveFile(savedFile);
+      gitSync.queueUpload(savedFile);
+      console.log(`[Image Editor] Overwrote original file: ${file.originalName}`);
+    }
+
+    res.json({ success: true, file: savedFile });
+  } catch (error) {
+    console.error('Image edit save error:', error);
+    res.status(500).json({ error: `Failed to save edited image: ${error.message}` });
+  }
+});
+
+const server = app.listen(PORT, async () => {
   console.log(`Backend server running on port ${PORT}`);
-  gitSync.initGitRepo();
+  await gitSync.initGitRepo();
+  seedAdminUser();
 });
 // Disable connection timeout to support unlimited-sized uploads and merges
 server.timeout = 0;

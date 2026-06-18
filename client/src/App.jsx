@@ -1,24 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  HardDrive, 
-  Search, 
-  Grid, 
-  List, 
-  Upload, 
-  Folder, 
-  Image as ImageIcon, 
-  Video as VideoIcon, 
-  FileText, 
-  Music, 
-  Archive, 
-  File as FileIcon, 
-  Play, 
-  Pause, 
-  Trash2, 
-  X, 
-  Eye, 
-  Download, 
-  RefreshCw, 
+import {
+  HardDrive,
+  Search,
+  Grid,
+  List,
+  Upload,
+  Folder,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  FileText,
+  Music,
+  Archive,
+  File as FileIcon,
+  Play,
+  Pause,
+  Trash2,
+  X,
+  Eye,
+  Download,
+  RefreshCw,
   AlertCircle,
   FolderOpen,
   Info,
@@ -34,15 +34,63 @@ import {
   Tag,
   Radio,
   Share2,
-  Copy
+  Copy,
+  Sliders,
+  Crop,
+  Type,
+  Edit3,
+  Plus,
+  RotateCw,
+  FlipHorizontal,
+  FlipVertical,
+  Save,
+  Undo,
+  Redo,
+  Maximize2
 } from 'lucide-react';
 import { ChunkUploader } from './utils/chunkUploader';
 
-const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-  ? '' 
+const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? ''
   : 'http://localhost:5000';
 
 function App() {
+  const [token, setToken] = useState(localStorage.getItem('token') || '');
+  const [currentUser, setCurrentUser] = useState(null);
+  const [usersList, setUsersList] = useState([]);
+  const [adminViewTab, setAdminViewTab] = useState('users');
+  
+  // Admin form states
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newRole, setNewRole] = useState('user');
+  const [selectedUserIdForPasswordReset, setSelectedUserIdForPasswordReset] = useState('');
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
+  const [adminError, setAdminError] = useState('');
+  const [adminSuccess, setAdminSuccess] = useState('');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+
+  // Local fetch override to inject Authorization Bearer token automatically
+  const originalFetch = window.fetch;
+  const fetch = async (url, options = {}) => {
+    const isApi = url.toString().startsWith(API_BASE) || url.toString().startsWith('/api');
+    if (isApi && token) {
+      const headers = options.headers ? { ...options.headers } : {};
+      headers['Authorization'] = `Bearer ${token}`;
+      options = { ...options, headers };
+    }
+    const response = await originalFetch(url, options);
+    if (response.status === 401 && isApi && !url.toString().includes('/api/auth/login')) {
+      localStorage.removeItem('token');
+      setToken('');
+      setCurrentUser(null);
+    }
+    return response;
+  };
+
   const [activeCategory, setActiveCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [files, setFiles] = useState([]);
@@ -56,7 +104,7 @@ function App() {
 
   // Folders navigation state
   const [currentFolderId, setCurrentFolderId] = useState(null);
-  
+
   // URL Scraper state
   const [showScraper, setShowScraper] = useState(false);
   const [scraperUrl, setScraperUrl] = useState('');
@@ -130,6 +178,1062 @@ function App() {
   const [sharedFolderRootId, setSharedFolderRootId] = useState(null);
   const [sharedFolderRoot, setSharedFolderRoot] = useState(null);
 
+  // Image Editor States
+  const [showImageEditor, setShowImageEditor] = useState(false);
+  const [editorFile, setEditorFile] = useState(null);
+  const [imageObj, setImageObj] = useState(null);
+  const [editorActiveTab, setEditorActiveTab] = useState('adjust');
+  const [canvasWidth, setCanvasWidth] = useState(800);
+  const [canvasHeight, setCanvasHeight] = useState(600);
+  const canvasRef = useRef(null);
+
+  // Adjustments states
+  const [brightness, setBrightness] = useState(100);
+  const [contrast, setContrast] = useState(100);
+  const [saturation, setSaturation] = useState(100);
+  const [exposure, setExposure] = useState(100);
+  const [hue, setHue] = useState(0);
+  const [blur, setBlur] = useState(0);
+  const [opacity, setOpacity] = useState(100);
+  const [warmth, setWarmth] = useState(0);
+  const [selectedFilter, setSelectedFilter] = useState('none');
+
+  // Brush / Drawing states
+  const [brushMode, setBrushMode] = useState('off'); // 'off', 'draw', 'erase'
+  const [brushColor, setBrushColor] = useState('#6366f1');
+  const [brushSize, setBrushSize] = useState(8);
+  const [brushOpacity, setBrushOpacity] = useState(100);
+  const [drawings, setDrawings] = useState([]);
+  const [currentPath, setCurrentPath] = useState(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+
+  // Texts states
+  const [texts, setTexts] = useState([]);
+  const [selectedTextId, setSelectedTextId] = useState(null);
+  const [inputText, setInputText] = useState('');
+  const [textColor, setTextColor] = useState('#ffffff');
+  const [textFont, setTextFont] = useState('Outfit');
+  const [textSize, setTextSize] = useState(36);
+  const [textBold, setTextBold] = useState(false);
+  const [textItalic, setTextItalic] = useState(false);
+  const [textAngle, setTextAngle] = useState(0);
+  const [textOpacity, setTextOpacity] = useState(100);
+  const [textBorderWidth, setTextBorderWidth] = useState(0);
+  const [textBorderColor, setTextBorderColor] = useState('#000000');
+
+  // Shapes & Stickers states
+  const [shapes, setShapes] = useState([]);
+  const [selectedStickerId, setSelectedStickerId] = useState(null);
+  const [shapeStrokeColor, setShapeStrokeColor] = useState('#6366f1');
+  const [shapeFillColor, setShapeFillColor] = useState('transparent');
+  const [shapeStrokeWidth, setShapeStrokeWidth] = useState(4);
+  const [stickerOpacity, setStickerOpacity] = useState(100);
+  const [stickerRotation, setStickerRotation] = useState(0);
+
+  // Resizer states
+  const [resizeWidth, setResizeWidth] = useState(800);
+  const [resizeHeight, setResizeHeight] = useState(600);
+  const [aspectRatioLock, setAspectRatioLock] = useState(true);
+
+  // Output / Save states
+  const [jpegQuality, setJpegQuality] = useState(0.9);
+  const [saveFormat, setSaveFormat] = useState('png'); // 'png' or 'jpeg'
+  const [saveAsCopy, setSaveAsCopy] = useState(true);
+  const [newFileName, setNewFileName] = useState('');
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [estimatedSize, setEstimatedSize] = useState('0 KB');
+
+  // History stack
+  const [history, setHistory] = useState([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [dragTarget, setDragTarget] = useState(null);
+
+  const getAdjustmentsState = () => ({
+    brightness, contrast, saturation, exposure, hue, blur, opacity, warmth, selectedFilter
+  });
+
+  // Load base image when modal opens
+  useEffect(() => {
+    if (showImageEditor && editorFile) {
+      setEditorSaving(false);
+      setSaveModalOpen(false);
+      setSaveAsCopy(true);
+      
+      const cleanName = editorFile.originalName.replace(/\.[^/.]+$/, "");
+      const ext = editorFile.originalName.split('.').pop() || 'png';
+      setNewFileName(`${cleanName}_edited.${ext}`);
+      setSaveFormat(ext.toLowerCase() === 'png' ? 'png' : 'jpeg');
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = `${API_BASE}/api/files/download/${editorFile.id}?t=${Date.now()}`;
+      img.onload = () => {
+        setImageObj(img);
+        setCanvasWidth(img.width);
+        setCanvasHeight(img.height);
+        setResizeWidth(img.width);
+        setResizeHeight(img.height);
+        
+        // Setup initial history state
+        const initial = {
+          width: img.width,
+          height: img.height,
+          drawings: [],
+          texts: [],
+          shapes: [],
+          adjustments: {
+            brightness: 100,
+            contrast: 100,
+            saturation: 100,
+            exposure: 100,
+            hue: 0,
+            blur: 0,
+            opacity: 100,
+            warmth: 0,
+            selectedFilter: 'none'
+          }
+        };
+        setHistory([initial]);
+        setHistoryIndex(0);
+        setDrawings([]);
+        setTexts([]);
+        setShapes([]);
+        setBrightness(100);
+        setContrast(100);
+        setSaturation(100);
+        setExposure(100);
+        setHue(0);
+        setBlur(0);
+        setOpacity(100);
+        setWarmth(0);
+        setSelectedFilter('none');
+        setSelectedTextId(null);
+        setSelectedStickerId(null);
+        setBrushMode('off');
+      };
+    }
+  }, [showImageEditor, editorFile]);
+
+  // History stack push
+  const pushHistory = (newDrawings, newTexts, newShapes, newAdjustments, newWidth, newHeight) => {
+    const nextState = {
+      width: newWidth || canvasWidth,
+      height: newHeight || canvasHeight,
+      drawings: JSON.parse(JSON.stringify(newDrawings)),
+      texts: JSON.parse(JSON.stringify(newTexts)),
+      shapes: JSON.parse(JSON.stringify(newShapes)),
+      adjustments: { ...newAdjustments }
+    };
+    const updatedHistory = history.slice(0, historyIndex + 1);
+    setHistory([...updatedHistory, nextState]);
+    setHistoryIndex(updatedHistory.length);
+  };
+
+  const applyHistoryState = (state) => {
+    setCanvasWidth(state.width);
+    setCanvasHeight(state.height);
+    setResizeWidth(state.width);
+    setResizeHeight(state.height);
+    setDrawings(state.drawings);
+    setTexts(state.texts);
+    setShapes(state.shapes);
+    const adj = state.adjustments;
+    setBrightness(adj.brightness);
+    setContrast(adj.contrast);
+    setSaturation(adj.saturation);
+    setExposure(adj.exposure);
+    setHue(adj.hue);
+    setBlur(adj.blur);
+    setOpacity(adj.opacity);
+    setWarmth(adj.warmth);
+    setSelectedFilter(adj.selectedFilter);
+    setSelectedTextId(null);
+    setSelectedStickerId(null);
+  };
+
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+      const prevIndex = historyIndex - 1;
+      setHistoryIndex(prevIndex);
+      applyHistoryState(history[prevIndex]);
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIndex < history.length - 1) {
+      const nextIndex = historyIndex + 1;
+      setHistoryIndex(nextIndex);
+      applyHistoryState(history[nextIndex]);
+    }
+  };
+
+  const handleResetEditor = () => {
+    if (history.length > 0) {
+      setHistoryIndex(0);
+      applyHistoryState(history[0]);
+    }
+  };
+
+  // Image Transformations (Rotate, Flips, Crop)
+  const handleRotateImage = () => {
+    if (!imageObj) return;
+    
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = canvasHeight;
+    tempCanvas.height = canvasWidth;
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    tempCtx.translate(canvasHeight / 2, canvasWidth / 2);
+    tempCtx.rotate(Math.PI / 2);
+    tempCtx.drawImage(imageObj, -canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight);
+    
+    const rotatedSrc = tempCanvas.toDataURL();
+    const newImg = new Image();
+    newImg.crossOrigin = 'anonymous';
+    newImg.src = rotatedSrc;
+    newImg.onload = () => {
+      setImageObj(newImg);
+      const prevWidth = canvasWidth;
+      const prevHeight = canvasHeight;
+      setCanvasWidth(prevHeight);
+      setCanvasHeight(prevWidth);
+      setResizeWidth(prevHeight);
+      setResizeHeight(prevWidth);
+      
+      const rotatedDrawings = drawings.map(path => ({
+        ...path,
+        points: path.points.map(p => ({ x: prevHeight - p.y, y: p.x }))
+      }));
+      
+      const rotatedTexts = texts.map(t => ({
+        ...t,
+        x: prevHeight - t.y,
+        y: t.x,
+        angle: ((t.angle || 0) + 90) % 360
+      }));
+      
+      const rotatedShapes = shapes.map(s => ({
+        ...s,
+        x: prevHeight - (s.y + s.height),
+        y: s.x,
+        width: s.height,
+        height: s.width,
+        angle: ((s.angle || 0) + 90) % 360
+      }));
+      
+      setDrawings(rotatedDrawings);
+      setTexts(rotatedTexts);
+      setShapes(rotatedShapes);
+      
+      pushHistory(rotatedDrawings, rotatedTexts, rotatedShapes, getAdjustmentsState(), prevHeight, prevWidth);
+    };
+  };
+
+  const handleFlipHorizontal = () => {
+    if (!imageObj) return;
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = canvasWidth;
+    tempCanvas.height = canvasHeight;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.translate(canvasWidth, 0);
+    tempCtx.scale(-1, 1);
+    tempCtx.drawImage(imageObj, 0, 0, canvasWidth, canvasHeight);
+    
+    const flippedSrc = tempCanvas.toDataURL();
+    const newImg = new Image();
+    newImg.crossOrigin = 'anonymous';
+    newImg.src = flippedSrc;
+    newImg.onload = () => {
+      setImageObj(newImg);
+      
+      const flippedDrawings = drawings.map(path => ({
+        ...path,
+        points: path.points.map(p => ({ x: canvasWidth - p.x, y: p.y }))
+      }));
+      
+      const flippedTexts = texts.map(t => ({
+        ...t,
+        x: canvasWidth - t.x,
+        angle: (360 - (t.angle || 0)) % 360
+      }));
+      
+      const flippedShapes = shapes.map(s => ({
+        ...s,
+        x: canvasWidth - s.x - s.width,
+        angle: (360 - (s.angle || 0)) % 360
+      }));
+      
+      setDrawings(flippedDrawings);
+      setTexts(flippedTexts);
+      setShapes(flippedShapes);
+      
+      pushHistory(flippedDrawings, flippedTexts, flippedShapes, getAdjustmentsState());
+    };
+  };
+
+  const handleFlipVertical = () => {
+    if (!imageObj) return;
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = canvasWidth;
+    tempCanvas.height = canvasHeight;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.translate(0, canvasHeight);
+    tempCtx.scale(1, -1);
+    tempCtx.drawImage(imageObj, 0, 0, canvasWidth, canvasHeight);
+    
+    const flippedSrc = tempCanvas.toDataURL();
+    const newImg = new Image();
+    newImg.crossOrigin = 'anonymous';
+    newImg.src = flippedSrc;
+    newImg.onload = () => {
+      setImageObj(newImg);
+      
+      const flippedDrawings = drawings.map(path => ({
+        ...path,
+        points: path.points.map(p => ({ x: p.x, y: canvasHeight - p.y }))
+      }));
+      
+      const flippedTexts = texts.map(t => ({
+        ...t,
+        y: canvasHeight - t.y,
+        angle: (360 - (t.angle || 0)) % 360
+      }));
+      
+      const flippedShapes = shapes.map(s => ({
+        ...s,
+        y: canvasHeight - s.y - s.height,
+        angle: (360 - (s.angle || 0)) % 360
+      }));
+      
+      setDrawings(flippedDrawings);
+      setTexts(flippedTexts);
+      setShapes(flippedShapes);
+      
+      pushHistory(flippedDrawings, flippedTexts, flippedShapes, getAdjustmentsState());
+    };
+  };
+
+  const handleCropImage = (ratioName) => {
+    if (!imageObj) return;
+    
+    let ratio = 1;
+    if (ratioName === '1:1') ratio = 1;
+    else if (ratioName === '4:3') ratio = 4/3;
+    else if (ratioName === '16:9') ratio = 16/9;
+    else if (ratioName === '3:2') ratio = 3/2;
+    else return;
+    
+    const W = canvasWidth;
+    const H = canvasHeight;
+    let cropW, cropH;
+    
+    if (W / H > ratio) {
+      cropH = H;
+      cropW = H * ratio;
+    } else {
+      cropW = W;
+      cropH = W / ratio;
+    }
+    
+    const cropX = (W - cropW) / 2;
+    const cropY = (H - cropH) / 2;
+    
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = cropW;
+    tempCanvas.height = cropH;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(imageObj, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+    
+    const croppedSrc = tempCanvas.toDataURL();
+    const newImg = new Image();
+    newImg.crossOrigin = 'anonymous';
+    newImg.src = croppedSrc;
+    newImg.onload = () => {
+      setImageObj(newImg);
+      setCanvasWidth(cropW);
+      setCanvasHeight(cropH);
+      setResizeWidth(cropW);
+      setResizeHeight(cropH);
+      
+      const croppedDrawings = drawings.map(path => ({
+        ...path,
+        points: path.points
+          .map(p => ({ x: p.x - cropX, y: p.y - cropY }))
+          .filter(p => p.x >= 0 && p.x <= cropW && p.y >= 0 && p.y <= cropH)
+      })).filter(path => path.points.length > 0);
+      
+      const croppedTexts = texts.map(t => ({
+        ...t,
+        x: t.x - cropX,
+        y: t.y - cropY
+      })).filter(t => t.x >= -50 && t.x <= cropW + 50 && t.y >= -50 && t.y <= cropH + 50);
+      
+      const croppedShapes = shapes.map(s => ({
+        ...s,
+        x: s.x - cropX,
+        y: s.y - cropY
+      })).filter(s => s.x >= -s.width && s.x <= cropW && s.y >= -s.height && s.y <= cropH);
+      
+      setDrawings(croppedDrawings);
+      setTexts(croppedTexts);
+      setShapes(croppedShapes);
+      
+      pushHistory(croppedDrawings, croppedTexts, croppedShapes, getAdjustmentsState(), cropW, cropH);
+    };
+  };
+
+  // Picture Resizer Studio
+  const handleResizeWidthChange = (val) => {
+    setResizeWidth(val);
+    if (aspectRatioLock && val && canvasWidth) {
+      const ratio = canvasHeight / canvasWidth;
+      setResizeHeight(Math.round(val * ratio));
+    }
+  };
+
+  const handleResizeHeightChange = (val) => {
+    setResizeHeight(val);
+    if (aspectRatioLock && val && canvasHeight) {
+      const ratio = canvasWidth / canvasHeight;
+      setResizeWidth(Math.round(val * ratio));
+    }
+  };
+
+  const applyPercentScale = (pct) => {
+    const newW = Math.round(canvasWidth * (pct / 100));
+    const newH = Math.round(canvasHeight * (pct / 100));
+    setResizeWidth(newW);
+    setResizeHeight(newH);
+  };
+
+  const handleApplyResize = () => {
+    if (!imageObj) return;
+    
+    const newW = parseInt(resizeWidth);
+    const newH = parseInt(resizeHeight);
+    if (isNaN(newW) || isNaN(newH) || newW <= 0 || newH <= 0) {
+      alert('Please enter valid dimensions.');
+      return;
+    }
+    
+    const oldW = canvasWidth;
+    const oldH = canvasHeight;
+    const scaleFactorX = newW / oldW;
+    const scaleFactorY = newH / oldH;
+    
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = newW;
+    tempCanvas.height = newH;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(imageObj, 0, 0, oldW, oldH, 0, 0, newW, newH);
+    
+    const resizedSrc = tempCanvas.toDataURL();
+    const newImg = new Image();
+    newImg.crossOrigin = 'anonymous';
+    newImg.src = resizedSrc;
+    newImg.onload = () => {
+      setImageObj(newImg);
+      setCanvasWidth(newW);
+      setCanvasHeight(newH);
+      
+      const scaledDrawings = drawings.map(path => ({
+        ...path,
+        size: path.size * (scaleFactorX + scaleFactorY) / 2,
+        points: path.points.map(p => ({ x: p.x * scaleFactorX, y: p.y * scaleFactorY }))
+      }));
+      
+      const scaledTexts = texts.map(t => ({
+        ...t,
+        x: t.x * scaleFactorX,
+        y: t.y * scaleFactorY,
+        fontSize: Math.round(t.fontSize * scaleFactorX),
+        borderWidth: t.borderWidth * scaleFactorX
+      }));
+      
+      const scaledShapes = shapes.map(s => ({
+        ...s,
+        x: s.x * scaleFactorX,
+        y: s.y * scaleFactorY,
+        width: s.width * scaleFactorX,
+        height: s.height * scaleFactorY,
+        strokeWidth: s.strokeWidth * (scaleFactorX + scaleFactorY) / 2
+      }));
+      
+      setDrawings(scaledDrawings);
+      setTexts(scaledTexts);
+      setShapes(scaledShapes);
+      
+      pushHistory(scaledDrawings, scaledTexts, scaledShapes, getAdjustmentsState(), newW, newH);
+      alert('Resolution scaled successfully!');
+    };
+  };
+
+  // Canvas Vector Elements adding
+  const handleAddText = () => {
+    if (!inputText.trim()) return;
+    const id = Date.now().toString() + Math.random().toString().substr(2, 5);
+    const newText = {
+      id,
+      text: inputText.trim(),
+      x: canvasWidth / 2,
+      y: canvasHeight / 2,
+      color: textColor,
+      fontSize: textSize,
+      fontFamily: textFont,
+      bold: textBold,
+      italic: textItalic,
+      angle: textAngle,
+      opacity: textOpacity,
+      borderWidth: textBorderWidth,
+      borderColor: textBorderColor
+    };
+    const updated = [...texts, newText];
+    setTexts(updated);
+    setInputText('');
+    setSelectedTextId(id);
+    setSelectedStickerId(null);
+    pushHistory(drawings, updated, shapes, getAdjustmentsState());
+  };
+
+  const updateSelectedText = (key, val) => {
+    if (!selectedTextId) return;
+    const updated = texts.map(t => {
+      if (t.id === selectedTextId) {
+        return { ...t, [key]: val };
+      }
+      return t;
+    });
+    setTexts(updated);
+  };
+
+  const commitSelectedTextHistory = () => {
+    pushHistory(drawings, texts, shapes, getAdjustmentsState());
+  };
+
+  const handleAddShape = (type) => {
+    const id = Date.now().toString() + Math.random().toString().substr(2, 5);
+    const newShape = {
+      id,
+      type,
+      x: canvasWidth / 2 - 50,
+      y: canvasHeight / 2 - 50,
+      width: 100,
+      height: 100,
+      strokeColor: shapeStrokeColor,
+      fillColor: shapeFillColor,
+      strokeWidth: shapeStrokeWidth,
+      opacity: 100,
+      angle: 0
+    };
+    const updated = [...shapes, newShape];
+    setShapes(updated);
+    setSelectedStickerId(id);
+    setSelectedTextId(null);
+    setEditorActiveTab('shapes');
+    pushHistory(drawings, texts, updated, getAdjustmentsState());
+  };
+
+  const handleAddSticker = (emoji) => {
+    const id = Date.now().toString() + Math.random().toString().substr(2, 5);
+    const newSticker = {
+      id,
+      type: emoji,
+      x: canvasWidth / 2 - 40,
+      y: canvasHeight / 2 - 40,
+      width: 80,
+      height: 80,
+      strokeColor: 'transparent',
+      fillColor: 'transparent',
+      strokeWidth: 0,
+      opacity: 100,
+      angle: 0
+    };
+    const updated = [...shapes, newSticker];
+    setShapes(updated);
+    setSelectedStickerId(id);
+    setSelectedTextId(null);
+    setEditorActiveTab('shapes');
+    pushHistory(drawings, texts, updated, getAdjustmentsState());
+  };
+
+  const updateSelectedShape = (key, val) => {
+    if (!selectedStickerId) return;
+    const updated = shapes.map(s => {
+      if (s.id === selectedStickerId) {
+        return { ...s, [key]: val };
+      }
+      return s;
+    });
+    setShapes(updated);
+  };
+
+  const commitSelectedShapeHistory = () => {
+    pushHistory(drawings, texts, shapes, getAdjustmentsState());
+  };
+
+  // Canvas Mouse Interactions
+  const handleMouseDown = (e) => {
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
+    
+    // Check text bounds first
+    for (let i = texts.length - 1; i >= 0; i--) {
+      const text = texts[i];
+      const ctx = canvas.getContext('2d');
+      ctx.save();
+      ctx.font = `${text.italic ? 'italic ' : ''}${text.bold ? 'bold ' : ''}${text.fontSize}px ${text.fontFamily || 'Outfit'}`;
+      const metrics = ctx.measureText(text.text);
+      const textW = metrics.width + 16;
+      const textH = text.fontSize + 16;
+      ctx.restore();
+      
+      const rad = (text.angle || 0) * Math.PI / 180;
+      const btnRelX = -textW / 2;
+      const btnRelY = -textH / 2;
+      const btnAbsX = text.x + btnRelX * Math.cos(rad) - btnRelY * Math.sin(rad);
+      const btnAbsY = text.y + btnRelX * Math.sin(rad) + btnRelY * Math.cos(rad);
+      
+      const dist = Math.hypot(mouseX - btnAbsX, mouseY - btnAbsY);
+      if (dist < 15 && text.id === selectedTextId) {
+        const updated = texts.filter(t => t.id !== text.id);
+        setTexts(updated);
+        setSelectedTextId(null);
+        pushHistory(drawings, updated, shapes, getAdjustmentsState());
+        return;
+      }
+      
+      const dx = mouseX - text.x;
+      const dy = mouseY - text.y;
+      const relX = dx * Math.cos(-rad) - dy * Math.sin(-rad);
+      const relY = dx * Math.sin(-rad) + dy * Math.cos(-rad);
+      
+      if (relX >= -textW / 2 && relX <= textW / 2 && relY >= -textH / 2 && relY <= textH / 2) {
+        setSelectedTextId(text.id);
+        setSelectedStickerId(null);
+        setEditorActiveTab('text');
+        setDragTarget({
+          type: 'text',
+          id: text.id,
+          clickX: mouseX,
+          clickY: mouseY,
+          startX: text.x,
+          startY: text.y
+        });
+        return;
+      }
+    }
+    
+    // Check shapes bounds next
+    for (let i = shapes.length - 1; i >= 0; i--) {
+      const shape = shapes[i];
+      const cx = shape.x + shape.width / 2;
+      const cy = shape.y + shape.height / 2;
+      const rad = (shape.angle || 0) * Math.PI / 180;
+      
+      const btnRelX = -shape.width / 2 - 8;
+      const btnRelY = -shape.height / 2 - 8;
+      const btnAbsX = cx + btnRelX * Math.cos(rad) - btnRelY * Math.sin(rad);
+      const btnAbsY = cy + btnRelX * Math.sin(rad) + btnRelY * Math.cos(rad);
+      
+      const dist = Math.hypot(mouseX - btnAbsX, mouseY - btnAbsY);
+      if (dist < 15 && shape.id === selectedStickerId) {
+        const updated = shapes.filter(s => s.id !== shape.id);
+        setShapes(updated);
+        setSelectedStickerId(null);
+        pushHistory(drawings, texts, updated, getAdjustmentsState());
+        return;
+      }
+      
+      const dx = mouseX - cx;
+      const dy = mouseY - cy;
+      const relX = dx * Math.cos(-rad) - dy * Math.sin(-rad);
+      const relY = dx * Math.sin(-rad) + dy * Math.cos(-rad);
+      
+      if (relX >= -shape.width / 2 && relX <= shape.width / 2 && relY >= -shape.height / 2 && relY <= shape.height / 2) {
+        setSelectedStickerId(shape.id);
+        setSelectedTextId(null);
+        setEditorActiveTab('shapes');
+        setDragTarget({
+          type: 'shape',
+          id: shape.id,
+          clickX: mouseX,
+          clickY: mouseY,
+          startX: shape.x,
+          startY: shape.y
+        });
+        return;
+      }
+    }
+    
+    // Drawing Brush Stroke trigger
+    if (brushMode !== 'off') {
+      setIsDrawing(true);
+      const strokePoint = { x: mouseX, y: mouseY };
+      const newPath = {
+        color: brushColor,
+        size: brushSize,
+        opacity: brushOpacity,
+        isEraser: brushMode === 'erase',
+        points: [strokePoint]
+      };
+      setCurrentPath(newPath);
+    } else {
+      setSelectedTextId(null);
+      setSelectedStickerId(null);
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
+    
+    if (isDrawing && currentPath) {
+      setCurrentPath({
+        ...currentPath,
+        points: [...currentPath.points, { x: mouseX, y: mouseY }]
+      });
+    } else if (dragTarget) {
+      const dx = mouseX - dragTarget.clickX;
+      const dy = mouseY - dragTarget.clickY;
+      
+      if (dragTarget.type === 'text') {
+        const updated = texts.map(t => {
+          if (t.id === dragTarget.id) {
+            return {
+              ...t,
+              x: dragTarget.startX + dx,
+              y: dragTarget.startY + dy
+            };
+          }
+          return t;
+        });
+        setTexts(updated);
+      } else if (dragTarget.type === 'shape') {
+        const updated = shapes.map(s => {
+          if (s.id === dragTarget.id) {
+            return {
+              ...s,
+              x: dragTarget.startX + dx,
+              y: dragTarget.startY + dy
+            };
+          }
+          return s;
+        });
+        setShapes(updated);
+      }
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (isDrawing && currentPath) {
+      const updated = [...drawings, currentPath];
+      setDrawings(updated);
+      setCurrentPath(null);
+      setIsDrawing(false);
+      pushHistory(updated, texts, shapes, getAdjustmentsState());
+    } else if (dragTarget) {
+      pushHistory(drawings, texts, shapes, getAdjustmentsState());
+      setDragTarget(null);
+    }
+  };
+
+  // Draw Lifecycle
+  const drawCanvas = () => {
+    if (!canvasRef.current || !imageObj) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw base image with filters
+    ctx.save();
+    
+    const totalBrightness = (brightness / 100) * (exposure / 100) * 100;
+    let filterString = `brightness(${totalBrightness}%) contrast(${contrast}%) saturate(${saturation}%) opacity(${opacity}%) hue-rotate(${hue}deg) blur(${blur}px)`;
+    
+    if (selectedFilter === 'sepia') filterString += ' sepia(80%)';
+    else if (selectedFilter === 'grayscale') filterString += ' grayscale(100%)';
+    else if (selectedFilter === 'invert') filterString += ' invert(100%)';
+    else if (selectedFilter === 'vintage') filterString += ' sepia(40%) saturate(120%) hue-rotate(-10deg)';
+    else if (selectedFilter === 'retro') filterString += ' contrast(120%) saturate(150%) hue-rotate(10deg)';
+    else if (selectedFilter === 'cool') filterString += ' hue-rotate(20deg) saturate(90%) brightness(105%)';
+    else if (selectedFilter === 'warm') filterString += ' hue-rotate(-20deg) saturate(110%) brightness(105%)';
+    else if (selectedFilter === 'noir') filterString += ' grayscale(100%) contrast(140%)';
+    
+    ctx.filter = filterString;
+    ctx.drawImage(imageObj, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+    
+    // Warmth / Tint overlay drawing
+    if (warmth !== 0) {
+      ctx.save();
+      if (warmth > 0) {
+        ctx.fillStyle = `rgba(255, 140, 0, ${warmth / 350})`; // warm sunlight orange
+      } else {
+        ctx.fillStyle = `rgba(0, 191, 255, ${Math.abs(warmth) / 350})`; // cool sunlight blue
+      }
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+    
+    // Draw drawings paths (supports composite transparent mask for eraser strokes)
+    if (drawings.length > 0 || currentPath) {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tempCtx = tempCanvas.getContext('2d');
+      
+      const drawStroke = (ctxTarget, path) => {
+        ctxTarget.save();
+        if (path.isEraser) {
+          ctxTarget.globalCompositeOperation = 'destination-out';
+          ctxTarget.strokeStyle = 'rgba(0,0,0,1)';
+        } else {
+          ctxTarget.strokeStyle = path.color;
+        }
+        ctxTarget.globalAlpha = (path.opacity || 100) / 100;
+        ctxTarget.lineWidth = path.size;
+        ctxTarget.lineCap = 'round';
+        ctxTarget.lineJoin = 'round';
+        ctxTarget.beginPath();
+        if (path.points.length > 0) {
+          ctxTarget.moveTo(path.points[0].x, path.points[0].y);
+          for (let i = 1; i < path.points.length; i++) {
+            ctxTarget.lineTo(path.points[i].x, path.points[i].y);
+          }
+          ctxTarget.stroke();
+        }
+        ctxTarget.restore();
+      };
+      
+      drawings.forEach(path => drawStroke(tempCtx, path));
+      if (currentPath) {
+        drawStroke(tempCtx, currentPath);
+      }
+      
+      ctx.drawImage(tempCanvas, 0, 0);
+    }
+    
+    // Draw Shapes
+    shapes.forEach(shape => {
+      ctx.save();
+      ctx.globalAlpha = (shape.opacity || 100) / 100;
+      
+      const cx = shape.x + shape.width / 2;
+      const cy = shape.y + shape.height / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate((shape.angle || 0) * Math.PI / 180);
+      ctx.translate(-cx, -cy);
+      
+      ctx.lineWidth = shape.strokeWidth;
+      ctx.strokeStyle = shape.strokeColor;
+      ctx.fillStyle = shape.fillColor;
+      
+      if (shape.type === 'rect') {
+        if (shape.fillColor !== 'transparent') {
+          ctx.fillRect(shape.x, shape.y, shape.width, shape.height);
+        }
+        if (shape.strokeWidth > 0) {
+          ctx.strokeRect(shape.x, shape.y, shape.width, shape.height);
+        }
+      } else if (shape.type === 'circle') {
+        ctx.beginPath();
+        const rx = Math.abs(shape.width) / 2;
+        ctx.arc(cx, cy, rx, 0, 2 * Math.PI);
+        if (shape.fillColor !== 'transparent') {
+          ctx.fill();
+        }
+        if (shape.strokeWidth > 0) {
+          ctx.stroke();
+        }
+      } else if (shape.type === 'line' || shape.type === 'arrow') {
+        ctx.beginPath();
+        ctx.moveTo(shape.x, shape.y);
+        ctx.lineTo(shape.x + shape.width, shape.y + shape.height);
+        ctx.stroke();
+        
+        if (shape.type === 'arrow') {
+          const angle = Math.atan2(shape.height, shape.width);
+          const endX = shape.x + shape.width;
+          const endY = shape.y + shape.height;
+          ctx.beginPath();
+          ctx.moveTo(endX, endY);
+          ctx.lineTo(endX - 15 * Math.cos(angle - Math.PI / 6), endY - 15 * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(endX - 15 * Math.cos(angle + Math.PI / 6), endY - 15 * Math.sin(angle + Math.PI / 6));
+          ctx.closePath();
+          ctx.fillStyle = shape.strokeColor;
+          ctx.fill();
+        }
+      } else {
+        ctx.font = `${Math.abs(shape.width)}px ${textFont || 'Outfit'}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(shape.type, cx, cy);
+      }
+      ctx.restore();
+    });
+    
+    // Draw Texts
+    texts.forEach(text => {
+      ctx.save();
+      ctx.globalAlpha = (text.opacity || 100) / 100;
+      
+      ctx.translate(text.x, text.y);
+      ctx.rotate((text.angle || 0) * Math.PI / 180);
+      
+      ctx.font = `${text.italic ? 'italic ' : ''}${text.bold ? 'bold ' : ''}${text.fontSize}px ${text.fontFamily || 'Outfit'}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      
+      if (text.borderWidth > 0) {
+        ctx.strokeStyle = text.borderColor || '#000000';
+        ctx.lineWidth = text.borderWidth;
+        ctx.strokeText(text.text, 0, 0);
+      }
+      
+      ctx.fillStyle = text.color || '#ffffff';
+      ctx.fillText(text.text, 0, 0);
+      ctx.restore();
+    });
+    
+    // Selection outlined dashed lines around selected elements
+    if (selectedTextId) {
+      const text = texts.find(t => t.id === selectedTextId);
+      if (text) {
+        ctx.save();
+        ctx.font = `${text.italic ? 'italic ' : ''}${text.bold ? 'bold ' : ''}${text.fontSize}px ${text.fontFamily || 'Outfit'}`;
+        const metrics = ctx.measureText(text.text);
+        const textW = metrics.width + 16;
+        const textH = text.fontSize + 16;
+        
+        ctx.translate(text.x, text.y);
+        ctx.rotate((text.angle || 0) * Math.PI / 180);
+        
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'var(--accent-indigo)';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(-textW / 2, -textH / 2, textW, textH);
+        
+        ctx.fillStyle = 'var(--accent-rose)';
+        ctx.beginPath();
+        ctx.arc(-textW / 2, -textH / 2, 8, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('×', -textW / 2, -textH / 2);
+        
+        ctx.restore();
+      }
+    }
+    
+    if (selectedStickerId) {
+      const shape = shapes.find(s => s.id === selectedStickerId);
+      if (shape) {
+        ctx.save();
+        const cx = shape.x + shape.width / 2;
+        const cy = shape.y + shape.height / 2;
+        ctx.translate(cx, cy);
+        ctx.rotate((shape.angle || 0) * Math.PI / 180);
+        
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'var(--accent-indigo)';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(-shape.width / 2 - 8, -shape.height / 2 - 8, shape.width + 16, shape.height + 16);
+        
+        ctx.fillStyle = 'var(--accent-rose)';
+        ctx.beginPath();
+        ctx.arc(-shape.width / 2 - 8, -shape.height / 2 - 8, 8, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('×', -shape.width / 2 - 8, -shape.height / 2 - 8);
+        
+        ctx.restore();
+      }
+    }
+  };
+
+  useEffect(() => {
+    drawCanvas();
+  }, [
+    imageObj, canvasWidth, canvasHeight, drawings, currentPath, texts, shapes,
+    selectedTextId, selectedStickerId, brightness, contrast, saturation,
+    exposure, hue, blur, opacity, warmth, selectedFilter
+  ]);
+
+  // Estimate JPEG compression output size
+  useEffect(() => {
+    if (saveModalOpen && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const mime = saveFormat === 'png' ? 'image/png' : 'image/jpeg';
+      const dataUrl = canvas.toDataURL(mime, jpegQuality);
+      const size = Math.round((dataUrl.split(',')[1].length) * 3 / 4);
+      setEstimatedSize(formatBytes(size));
+    }
+  }, [saveModalOpen, saveFormat, jpegQuality]);
+
+  const handleSaveImage = async () => {
+    if (!canvasRef.current || !editorFile) return;
+    setEditorSaving(true);
+    try {
+      const canvas = canvasRef.current;
+      const mime = saveFormat === 'png' ? 'image/png' : 'image/jpeg';
+      const dataUrl = canvas.toDataURL(mime, jpegQuality);
+      
+      const payload = {
+        fileName: saveAsCopy ? newFileName : editorFile.originalName,
+        imageData: dataUrl,
+        saveAsCopy
+      };
+      
+      const response = await fetch(`${API_BASE}/api/files/${editorFile.id}/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      
+      if (response.ok) {
+        alert('Image edited successfully!');
+        setShowImageEditor(false);
+        fetchFiles();
+      } else {
+        const errorData = await response.json();
+        alert(errorData.error || 'Failed to save edits');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Network error while saving edits');
+    } finally {
+      setEditorSaving(false);
+      setSaveModalOpen(false);
+    }
+  };
+
+  const handleLocalDownload = () => {
+    if (!canvasRef.current || !editorFile) return;
+    const canvas = canvasRef.current;
+    const mime = saveFormat === 'png' ? 'image/png' : 'image/jpeg';
+    const dataUrl = canvas.toDataURL(mime, jpegQuality);
+    
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = saveAsCopy ? newFileName : editorFile.originalName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const openDistribute = async (file) => {
     setDistributeFile(file);
     setDistributeTags(null);
@@ -169,7 +1273,7 @@ function App() {
     setSelectedMbMatch(null);
     setMbResults([]);
     setMbCoverUrl(null);
-    
+
     const cleanName = file.originalName.replace(/\.[^/.]+$/, "").trim();
     setMbSearchQuery(cleanName);
     setLoadingTaggerData(true);
@@ -277,6 +1381,164 @@ function App() {
     }
   };
 
+  // Validate token and fetch user details on mount/token change
+  useEffect(() => {
+    if (token) {
+      const checkUser = async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/auth/me`);
+          if (res.ok) {
+            const data = await res.json();
+            setCurrentUser(data);
+          } else {
+            setToken('');
+            localStorage.removeItem('token');
+            setCurrentUser(null);
+          }
+        } catch (err) {
+          console.error('Failed to verify token:', err);
+        }
+      };
+      checkUser();
+    } else {
+      setCurrentUser(null);
+    }
+  }, [token]);
+
+  // Fetch registered users list when Admin Dashboard is active
+  const fetchUsers = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/users`);
+      if (res.ok) {
+        const data = await res.json();
+        setUsersList(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch users:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeCategory === 'admin' && currentUser?.role === 'admin') {
+      fetchUsers();
+    }
+  }, [activeCategory]);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem('token', data.token);
+        setToken(data.token);
+        setCurrentUser(data.user);
+      } else {
+        setLoginError(data.error || 'Login failed');
+      }
+    } catch (err) {
+      console.error('Login error:', err);
+      setLoginError('Could not connect to authentication server');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST' });
+    } catch (err) {
+      console.error('Logout failed:', err);
+    } finally {
+      localStorage.removeItem('token');
+      setToken('');
+      setCurrentUser(null);
+      setActiveCategory('all');
+    }
+  };
+
+  const handleCreateUser = async (e) => {
+    e.preventDefault();
+    setAdminError('');
+    setAdminSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAdminSuccess(`User "${newUsername}" created successfully!`);
+        setNewUsername('');
+        setNewPassword('');
+        setNewRole('user');
+        fetchUsers();
+      } else {
+        setAdminError(data.error || 'Failed to create user');
+      }
+    } catch (err) {
+      setAdminError('Failed to connect to server');
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    setAdminError('');
+    setAdminSuccess('');
+    if (!selectedUserIdForPasswordReset) {
+      setAdminError('Please select a user');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/users/${selectedUserIdForPasswordReset}/password`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: resetPasswordValue })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAdminSuccess('Password updated successfully!');
+        setResetPasswordValue('');
+        setSelectedUserIdForPasswordReset('');
+      } else {
+        setAdminError(data.error || 'Failed to update password');
+      }
+    } catch (err) {
+      setAdminError('Failed to connect to server');
+    }
+  };
+
+  const handleDeleteUser = async (id, name) => {
+    if (name === 'maoriboishido') {
+      alert('Cannot delete the master admin account');
+      return;
+    }
+    if (window.confirm(`Are you sure you want to delete user "${name}"?`)) {
+      try {
+        const res = await fetch(`${API_BASE}/api/admin/users/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+          setAdminSuccess(`User "${name}" deleted successfully!`);
+          fetchUsers();
+        } else {
+          const data = await res.json();
+          setAdminError(data.error || 'Failed to delete user');
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  const isSharedView = new URLSearchParams(window.location.search).has('shareFile') || 
+                       new URLSearchParams(window.location.search).has('shareFolder');
+
   const handleLocalCoverChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -328,7 +1590,7 @@ function App() {
       addField('events.0.date.year', taggerTags.year);
     }
     addField('mediums.0.format', 'Digital Media');
-    
+
     // Seed track details
     addField('mediums.0.track.0.name', taggerTags.title || taggerFile.originalName);
     addField('mediums.0.track.0.artist_credit.names.0.name', taggerTags.artist || 'Unknown Artist');
@@ -394,7 +1656,7 @@ function App() {
         .then(data => {
           setSharedFile(data);
           const textMimes = [
-            'text/plain', 'text/html', 'text/css', 'text/csv', 
+            'text/plain', 'text/html', 'text/css', 'text/csv',
             'application/javascript', 'application/json', 'application/x-javascript'
           ];
           if (data.mimeType.startsWith('text/') || textMimes.includes(data.mimeType)) {
@@ -594,7 +1856,7 @@ function App() {
       if (searchQuery) {
         url.searchParams.append('search', searchQuery);
       }
-      
+
       const response = await fetch(url.toString());
       if (response.ok) {
         let data = await response.json();
@@ -657,10 +1919,10 @@ function App() {
     }
 
     const textMimes = [
-      'text/plain', 'text/html', 'text/css', 'text/csv', 
+      'text/plain', 'text/html', 'text/css', 'text/csv',
       'application/javascript', 'application/json', 'application/x-javascript'
     ];
-    
+
     const isText = previewFile.mimeType.startsWith('text/') || textMimes.includes(previewFile.mimeType);
 
     if (isText) {
@@ -736,23 +1998,24 @@ function App() {
 
     Array.from(selectedFiles).forEach(file => {
       const uploadKey = `${file.name}_${file.size}`;
-      
+
       // Prevent duplicates in queue
       if (uploads.some(u => u.id === uploadKey && (u.status === 'uploading' || u.status === 'merging'))) {
         return;
       }
 
       const uploader = new ChunkUploader(file, {
+        token: token,
         folderId: currentFolderId,
         onProgress: (pInfo) => {
-          setUploads(prev => prev.map(u => 
-            u.id === uploadKey 
-              ? { ...u, progress: pInfo.progress, speed: pInfo.speed, eta: pInfo.eta } 
+          setUploads(prev => prev.map(u =>
+            u.id === uploadKey
+              ? { ...u, progress: pInfo.progress, speed: pInfo.speed, eta: pInfo.eta }
               : u
           ));
         },
         onStatusChange: (status) => {
-          setUploads(prev => prev.map(u => 
+          setUploads(prev => prev.map(u =>
             u.id === uploadKey ? { ...u, status } : u
           ));
           if (status === 'completed') {
@@ -1023,7 +2286,7 @@ function App() {
     e.preventDefault();
     setIsDragging(false);
     dragCounter.current = 0;
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleFilesSelect(e.dataTransfer.files);
     }
@@ -1065,7 +2328,7 @@ function App() {
         <div className="shared-layout">
           <div className="ambient-glow-1"></div>
           <div className="ambient-glow-2"></div>
-          
+
           <div className="shared-card glass-panel">
             <div className="shared-logo">
               <div className="logo-icon" style={{ width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--gradient-accent)', borderRadius: '8px' }}>
@@ -1081,16 +2344,16 @@ function App() {
             {/* Inline Preview box based on file type */}
             <div className="shared-preview-box">
               {sharedFile.category === 'images' && (
-                <img 
-                  src={`${API_BASE}/api/files/download/${sharedFile.id}`} 
-                  alt={sharedFile.originalName} 
+                <img
+                  src={`${API_BASE}/api/files/download/${sharedFile.id}`}
+                  alt={sharedFile.originalName}
                 />
               )}
 
               {sharedFile.category === 'videos' && (
-                <video 
-                  src={`${API_BASE}/api/files/download/${sharedFile.id}`} 
-                  controls 
+                <video
+                  src={`${API_BASE}/api/files/download/${sharedFile.id}`}
+                  controls
                   autoPlay
                 />
               )}
@@ -1100,9 +2363,9 @@ function App() {
                   <div className="audio-disk playing" style={{ margin: '0 auto 16px auto', width: '80px', height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', color: '#fff' }}>
                     <Music size={32} />
                   </div>
-                  <audio 
-                    src={`${API_BASE}/api/files/download/${sharedFile.id}`} 
-                    controls 
+                  <audio
+                    src={`${API_BASE}/api/files/download/${sharedFile.id}`}
+                    controls
                     autoPlay
                     style={{ width: '100%' }}
                   />
@@ -1110,28 +2373,28 @@ function App() {
               )}
 
               {/* Text document & code */}
-              {(sharedFile.mimeType.startsWith('text/') || 
-                sharedFile.mimeType === 'application/json' || 
+              {(sharedFile.mimeType.startsWith('text/') ||
+                sharedFile.mimeType === 'application/json' ||
                 sharedFile.mimeType === 'application/javascript') && (
-                <pre>
-                  {textContent}
-                </pre>
-              )}
+                  <pre>
+                    {textContent}
+                  </pre>
+                )}
 
               {/* Fallback for files that cannot be viewed inline */}
-              {sharedFile.category !== 'images' && 
-               sharedFile.category !== 'videos' && 
-               sharedFile.category !== 'audio' && 
-               !sharedFile.mimeType.startsWith('text/') && 
-               sharedFile.mimeType !== 'application/json' && 
-               sharedFile.mimeType !== 'application/javascript' && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '32px' }}>
-                  <div className="list-icon-box" style={{ width: '64px', height: '64px', borderRadius: '12px', background: 'rgba(99, 102, 241, 0.1)', color: 'var(--accent-indigo)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    {getCategoryIcon(sharedFile.category, 32)}
+              {sharedFile.category !== 'images' &&
+                sharedFile.category !== 'videos' &&
+                sharedFile.category !== 'audio' &&
+                !sharedFile.mimeType.startsWith('text/') &&
+                sharedFile.mimeType !== 'application/json' &&
+                sharedFile.mimeType !== 'application/javascript' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '32px' }}>
+                    <div className="list-icon-box" style={{ width: '64px', height: '64px', borderRadius: '12px', background: 'rgba(99, 102, 241, 0.1)', color: 'var(--accent-indigo)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {getCategoryIcon(sharedFile.category, 32)}
+                    </div>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Preview not supported for this file type</span>
                   </div>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Preview not supported for this file type</span>
-                </div>
-              )}
+                )}
             </div>
 
             {/* Metadata attributes */}
@@ -1169,7 +2432,7 @@ function App() {
             </div>
 
             {/* Download button */}
-            <button 
+            <button
               className="glow-btn shared-download-btn"
               onClick={(e) => handleDownload(e, sharedFile)}
             >
@@ -1177,8 +2440,8 @@ function App() {
               Download File
             </button>
 
-            <button 
-              className="modal-btn" 
+            <button
+              className="modal-btn"
               style={{ width: '100%', border: '1px solid var(--glass-border)', background: 'transparent' }}
               onClick={() => window.location.href = '/'}
             >
@@ -1190,8 +2453,57 @@ function App() {
     }
   }
 
+  if (!token && !isSharedView) {
+    return (
+      <div className="login-container">
+        <div className="ambient-glow-1"></div>
+        <div className="ambient-glow-2"></div>
+        <div className="login-card glass-panel">
+          <div className="login-header">
+            <HardDrive className="login-logo animate-pulse" size={48} />
+            <h1 className="login-title">G00J Archives</h1>
+            <p className="login-subtitle">Premium Cloud Storage & Music Studio</p>
+          </div>
+          <form className="login-form" onSubmit={handleLogin}>
+            {loginError && (
+              <div className="login-error-alert">
+                <AlertCircle size={16} />
+                <span>{loginError}</span>
+              </div>
+            )}
+            <div className="login-input-group">
+              <label className="login-input-label">Username</label>
+              <input
+                type="text"
+                className="login-input search-input"
+                placeholder="Enter username"
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+                required
+              />
+            </div>
+            <div className="login-input-group">
+              <label className="login-input-label">Password</label>
+              <input
+                type="password"
+                className="login-input search-input"
+                placeholder="Enter password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                required
+              />
+            </div>
+            <button type="submit" className="login-submit-btn glow-btn" disabled={loginLoading}>
+              {loginLoading ? 'Signing In...' : 'Sign In'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div 
+    <div
       className="app-container"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
@@ -1212,80 +2524,109 @@ function App() {
             <h1 className="logo-text">G00J ARCHIVES</h1>
           </div>
 
-        <nav className="nav-menu">
-          <a 
-            className={`nav-item ${activeCategory === 'all' ? 'active' : ''}`}
-            onClick={() => setActiveCategory('all')}
-          >
-            <Folder size={18} />
-            <span>All Files</span>
-            <span className="nav-badge">{getCategoryCount('all')}</span>
-          </a>
-          <a 
-            className={`nav-item ${activeCategory === 'images' ? 'active' : ''}`}
-            onClick={() => setActiveCategory('images')}
-          >
-            <ImageIcon size={18} />
-            <span>Images</span>
-            <span className="nav-badge">{getCategoryCount('images')}</span>
-          </a>
-          <a 
-            className={`nav-item ${activeCategory === 'videos' ? 'active' : ''}`}
-            onClick={() => setActiveCategory('videos')}
-          >
-            <VideoIcon size={18} />
-            <span>Videos</span>
-            <span className="nav-badge">{getCategoryCount('videos')}</span>
-          </a>
-          <a 
-            className={`nav-item ${activeCategory === 'documents' ? 'active' : ''}`}
-            onClick={() => setActiveCategory('documents')}
-          >
-            <FileText size={18} />
-            <span>Documents</span>
-            <span className="nav-badge">{getCategoryCount('documents')}</span>
-          </a>
-          <a 
-            className={`nav-item ${activeCategory === 'audio' ? 'active' : ''}`}
-            onClick={() => setActiveCategory('audio')}
-          >
-            <Music size={18} />
-            <span>Audio</span>
-            <span className="nav-badge">{getCategoryCount('audio')}</span>
-          </a>
-          <a 
-            className={`nav-item ${activeCategory === 'archives' ? 'active' : ''}`}
-            onClick={() => setActiveCategory('archives')}
-          >
-            <Archive size={18} />
-            <span>Archives</span>
-            <span className="nav-badge">{getCategoryCount('archives')}</span>
-          </a>
-          <a 
-            className={`nav-item ${activeCategory === 'others' ? 'active' : ''}`}
-            onClick={() => setActiveCategory('others')}
-          >
-            <FileIcon size={18} />
-            <span>Others</span>
-            <span className="nav-badge">{getCategoryCount('others')}</span>
-          </a>
-        </nav>
+          <nav className="nav-menu">
+            <a
+              className={`nav-item ${activeCategory === 'all' ? 'active' : ''}`}
+              onClick={() => setActiveCategory('all')}
+            >
+              <Folder size={18} />
+              <span>All Files</span>
+              <span className="nav-badge">{getCategoryCount('all')}</span>
+            </a>
+            <a
+              className={`nav-item ${activeCategory === 'images' ? 'active' : ''}`}
+              onClick={() => setActiveCategory('images')}
+            >
+              <ImageIcon size={18} />
+              <span>Images</span>
+              <span className="nav-badge">{getCategoryCount('images')}</span>
+            </a>
+            <a
+              className={`nav-item ${activeCategory === 'videos' ? 'active' : ''}`}
+              onClick={() => setActiveCategory('videos')}
+            >
+              <VideoIcon size={18} />
+              <span>Videos</span>
+              <span className="nav-badge">{getCategoryCount('videos')}</span>
+            </a>
+            <a
+              className={`nav-item ${activeCategory === 'documents' ? 'active' : ''}`}
+              onClick={() => setActiveCategory('documents')}
+            >
+              <FileText size={18} />
+              <span>Documents</span>
+              <span className="nav-badge">{getCategoryCount('documents')}</span>
+            </a>
+            <a
+              className={`nav-item ${activeCategory === 'audio' ? 'active' : ''}`}
+              onClick={() => setActiveCategory('audio')}
+            >
+              <Music size={18} />
+              <span>Audio</span>
+              <span className="nav-badge">{getCategoryCount('audio')}</span>
+            </a>
+            <a
+              className={`nav-item ${activeCategory === 'archives' ? 'active' : ''}`}
+              onClick={() => setActiveCategory('archives')}
+            >
+              <Archive size={18} />
+              <span>Archives</span>
+              <span className="nav-badge">{getCategoryCount('archives')}</span>
+            </a>
+            <a
+              className={`nav-item ${activeCategory === 'others' ? 'active' : ''}`}
+              onClick={() => setActiveCategory('others')}
+            >
+              <FileIcon size={18} />
+              <span>Others</span>
+              <span className="nav-badge">{getCategoryCount('others')}</span>
+            </a>
+            {currentUser?.role === 'admin' && (
+              <a
+                className={`nav-item ${activeCategory === 'admin' ? 'active' : ''}`}
+                onClick={() => setActiveCategory('admin')}
+                style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)', marginTop: '8px', paddingTop: '12px' }}
+              >
+                <Sliders size={18} />
+                <span>Admin Dashboard</span>
+              </a>
+            )}
+          </nav>
 
-        {/* Unlimited Storage gauge */}
-        <div className="storage-gauge-container">
-          <div className="storage-header">
-            <span className="storage-title">Storage Used</span>
-            <span className="storage-val">{formatBytes(totalUsedStorage, 1)} / ∞</span>
+          {/* Unlimited Storage gauge */}
+          <div className="storage-gauge-container">
+            <div className="storage-header">
+              <span className="storage-title">Storage Used</span>
+              <span className="storage-val">{formatBytes(totalUsedStorage, 1)} / ∞</span>
+            </div>
+            <div className="storage-bar-bg" style={{ height: '3px' }}>
+              <div
+                className="storage-bar-fill"
+                style={{ width: '100%', background: 'var(--gradient-accent)' }}
+              ></div>
+            </div>
+            <span className="storage-desc">Unlimited Storage Enabled</span>
           </div>
-          <div className="storage-bar-bg" style={{ height: '3px' }}>
-            <div 
-              className="storage-bar-fill"
-              style={{ width: '100%', background: 'var(--gradient-accent)' }}
-            ></div>
+
+          <div className="user-profile-sidebar" style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)', padding: '16px 8px 0 8px', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div className="avatar-placeholder" style={{ background: 'var(--accent-indigo)', color: '#fff', borderRadius: '50%', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                {currentUser?.username?.charAt(0).toUpperCase()}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {currentUser?.username}
+                </span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  {currentUser?.role === 'admin' ? 'Administrator' : 'User'}
+                </span>
+              </div>
+            </div>
+            <button className="glow-btn" onClick={handleLogout} style={{ padding: '6px 12px', fontSize: '0.75rem', width: '100%', margin: 0, height: '32px' }}>
+              Log Out
+            </button>
           </div>
-          <span className="storage-desc">Unlimited Storage Enabled</span>
-        </div>
-      </aside>
+        </aside>
       )}
 
       {/* Main Panel */}
@@ -1293,17 +2634,17 @@ function App() {
         <header className="top-header glass-panel">
           <div className="search-wrapper">
             <Search size={18} className="search-icon" />
-            <input 
-              type="text" 
-              className="search-input" 
-              placeholder="Search files in the Archives..." 
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Search files in the Archives..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
 
           <div className="header-actions">
-            <button 
+            <button
               className="view-toggle-btn"
               onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
               title={viewMode === 'grid' ? "Switch to List View" : "Switch to Grid View"}
@@ -1312,7 +2653,7 @@ function App() {
             </button>
 
             {uploads.length > 0 && (
-              <button 
+              <button
                 className="view-toggle-btn"
                 onClick={() => setShowQueue(!showQueue)}
                 title="Toggle Upload Queue"
@@ -1324,8 +2665,8 @@ function App() {
 
             {!sharedFolderRootId && (
               <>
-                <button 
-                  className="glow-btn action-btn" 
+                <button
+                  className="glow-btn action-btn"
                   onClick={handleCreateFolder}
                   style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--glass-border)', boxShadow: 'none' }}
                 >
@@ -1333,13 +2674,13 @@ function App() {
                   New Folder
                 </button>
 
-                <button 
-                  className="glow-btn action-btn" 
-                  onClick={() => { 
-                    setShowScraper(true); 
-                    setScraperUrl(''); 
-                    setScrapedResults([]); 
-                    setDownloadingUrls({}); 
+                <button
+                  className="glow-btn action-btn"
+                  onClick={() => {
+                    setShowScraper(true);
+                    setScraperUrl('');
+                    setScrapedResults([]);
+                    setDownloadingUrls({});
                     setScheduleFolderId(currentFolderId || 'root');
                     fetchScraperJobs();
                   }}
@@ -1349,20 +2690,20 @@ function App() {
                   Scrape Link
                 </button>
 
-                <button 
-                  className="glow-btn action-btn" 
+                <button
+                  className="glow-btn action-btn"
                   onClick={handleUploadClick}
                 >
                   <Upload size={16} />
                   Upload Files
                 </button>
-                
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  style={{ display: 'none' }} 
-                  multiple 
-                  onChange={(e) => handleFilesSelect(e.target.files)} 
+
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  style={{ display: 'none' }}
+                  multiple
+                  onChange={(e) => handleFilesSelect(e.target.files)}
                 />
               </>
             )}
@@ -1371,9 +2712,207 @@ function App() {
 
         {/* Content body */}
         <section className="content-body">
-          <div className="category-banner">
-            <div>
-              <h2 className="category-title">{activeCategory} Files</h2>
+          {activeCategory === 'admin' ? (
+            <div className="admin-dashboard-container glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', minHeight: '400px' }}>
+              <div className="category-banner" style={{ marginBottom: '24px', paddingBottom: '0' }}>
+                <div>
+                  <h2 className="category-title">Admin Dashboard</h2>
+                  <p className="category-subtitle">Manage system users, roles, and security policies</p>
+                </div>
+              </div>
+
+              <div className="admin-tabs-nav">
+                <button
+                  className={`admin-tab-btn ${adminViewTab === 'users' ? 'active' : ''}`}
+                  onClick={() => { setAdminViewTab('users'); setAdminError(''); setAdminSuccess(''); }}
+                >
+                  User List
+                </button>
+                <button
+                  className={`admin-tab-btn ${adminViewTab === 'create' ? 'active' : ''}`}
+                  onClick={() => { setAdminViewTab('create'); setAdminError(''); setAdminSuccess(''); }}
+                >
+                  Create User
+                </button>
+                <button
+                  className={`admin-tab-btn ${adminViewTab === 'password' ? 'active' : ''}`}
+                  onClick={() => { setAdminViewTab('password'); setAdminError(''); setAdminSuccess(''); }}
+                >
+                  Reset Password
+                </button>
+              </div>
+
+              {adminError && (
+                <div className="admin-alert-box error" style={{ marginBottom: '16px' }}>
+                  <AlertCircle size={14} />
+                  <span>{adminError}</span>
+                </div>
+              )}
+              {adminSuccess && (
+                <div className="admin-alert-box success" style={{ marginBottom: '16px' }}>
+                  <AlertCircle size={14} style={{ color: 'var(--accent-emerald)' }} />
+                  <span>{adminSuccess}</span>
+                </div>
+              )}
+
+              {adminViewTab === 'users' && (
+                <div className="files-list-wrapper glass-panel" style={{ border: 'none', background: 'transparent', boxShadow: 'none' }}>
+                  <table className="files-list-table">
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Created Date</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {usersList.map(u => (
+                        <tr key={u.id} className="files-list-row" style={{ cursor: 'default' }}>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <div style={{ background: u.role === 'admin' ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.05)', color: u.role === 'admin' ? 'var(--accent-indigo)' : 'var(--text-secondary)', borderRadius: '50%', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                {u.username.charAt(0).toUpperCase()}
+                              </div>
+                              <span style={{ fontWeight: 600 }}>{u.username}</span>
+                            </div>
+                          </td>
+                          <td>
+                            <span style={{
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              background: u.role === 'admin' ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                              color: u.role === 'admin' ? 'var(--accent-indigo)' : 'var(--text-secondary)'
+                            }}>
+                              {u.role.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="list-date-cell">{new Date(u.createdDate).toLocaleDateString()}</td>
+                          <td>
+                            <div className="list-actions-cell" style={{ justifyContent: 'flex-end' }}>
+                              {u.username !== 'maoriboishido' ? (
+                                <>
+                                  <button
+                                    className="file-action-btn"
+                                    onClick={() => {
+                                      setSelectedUserIdForPasswordReset(u.id);
+                                      setAdminViewTab('password');
+                                    }}
+                                    title="Reset Password"
+                                    style={{ color: 'var(--accent-indigo)', marginRight: '8px' }}
+                                  >
+                                    <Edit3 size={14} />
+                                  </button>
+                                  <button
+                                    className="file-action-btn btn-delete"
+                                    onClick={() => handleDeleteUser(u.id, u.username)}
+                                    title="Delete User"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </>
+                              ) : (
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>System Admin</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {adminViewTab === 'create' && (
+                <div className="admin-form-card glass-panel" style={{ maxWidth: '440px' }}>
+                  <form onSubmit={handleCreateUser} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div className="login-input-group">
+                      <label className="login-input-label">Username</label>
+                      <input
+                        type="text"
+                        className="search-input"
+                        style={{ height: '38px', paddingLeft: '12px' }}
+                        value={newUsername}
+                        onChange={(e) => setNewUsername(e.target.value)}
+                        placeholder="Enter username"
+                        required
+                      />
+                    </div>
+                    <div className="login-input-group">
+                      <label className="login-input-label">Password</label>
+                      <input
+                        type="password"
+                        className="search-input"
+                        style={{ height: '38px', paddingLeft: '12px' }}
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="Enter initial password"
+                        required
+                      />
+                    </div>
+                    <div className="login-input-group">
+                      <label className="login-input-label">Role</label>
+                      <select
+                        className="editor-select"
+                        value={newRole}
+                        onChange={(e) => setNewRole(e.target.value)}
+                        style={{ height: '38px', border: '1px solid var(--glass-border)' }}
+                      >
+                        <option value="user">Regular User</option>
+                        <option value="admin">Administrator</option>
+                      </select>
+                    </div>
+                    <button type="submit" className="glow-btn" style={{ width: '100%', height: '38px', margin: '8px 0 0 0' }}>
+                      Create User Account
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {adminViewTab === 'password' && (
+                <div className="admin-form-card glass-panel" style={{ maxWidth: '440px' }}>
+                  <form onSubmit={handleResetPassword} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div className="login-input-group">
+                      <label className="login-input-label">Select User</label>
+                      <select
+                        className="editor-select"
+                        value={selectedUserIdForPasswordReset}
+                        onChange={(e) => setSelectedUserIdForPasswordReset(e.target.value)}
+                        style={{ height: '38px', border: '1px solid var(--glass-border)' }}
+                        required
+                      >
+                        <option value="">-- Choose User --</option>
+                        {usersList.filter(u => u.username !== 'maoriboishido').map(u => (
+                          <option key={u.id} value={u.id}>{u.username}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="login-input-group">
+                      <label className="login-input-label">New Password</label>
+                      <input
+                        type="password"
+                        className="search-input"
+                        style={{ height: '38px', paddingLeft: '12px' }}
+                        value={resetPasswordValue}
+                        onChange={(e) => setResetPasswordValue(e.target.value)}
+                        placeholder="Enter new password"
+                        required
+                      />
+                    </div>
+                    <button type="submit" className="glow-btn" style={{ width: '100%', height: '38px', margin: '8px 0 0 0' }}>
+                      Update Password
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="category-banner">
+                <div>
+                  <h2 className="category-title">{activeCategory} Files</h2>
               <p className="category-subtitle">
                 {(files.length + folders.length)} {(files.length + folders.length) === 1 ? 'item' : 'items'} stored in this category
               </p>
@@ -1384,14 +2923,14 @@ function App() {
           {activeCategory === 'all' && !searchQuery && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
               {!sharedFolderRootId ? (
-                <span 
+                <span
                   onClick={() => setCurrentFolderId(null)}
                   style={{ cursor: 'pointer', color: currentFolderId ? 'var(--accent-indigo)' : 'inherit', fontWeight: currentFolderId ? 500 : 600 }}
                 >
                   Root
                 </span>
               ) : (
-                <span 
+                <span
                   onClick={() => setCurrentFolderId(sharedFolderRootId)}
                   style={{ cursor: 'pointer', color: currentFolderId !== sharedFolderRootId ? 'var(--accent-indigo)' : 'inherit', fontWeight: currentFolderId !== sharedFolderRootId ? 500 : 600 }}
                 >
@@ -1403,10 +2942,10 @@ function App() {
                 return visibleCrumbs.map((crumb, idx) => (
                   <React.Fragment key={crumb.id}>
                     <span style={{ color: 'var(--text-tertiary)' }}>/</span>
-                    <span 
+                    <span
                       onClick={() => setCurrentFolderId(crumb.id)}
-                      style={{ 
-                        cursor: 'pointer', 
+                      style={{
+                        cursor: 'pointer',
                         color: idx === visibleCrumbs.length - 1 ? 'inherit' : 'var(--accent-indigo)',
                         fontWeight: idx === visibleCrumbs.length - 1 ? 600 : 500
                       }}
@@ -1421,7 +2960,7 @@ function App() {
 
           {/* Drag drop zone helper */}
           {!sharedFolderRootId && (
-            <div 
+            <div
               className={`drag-drop-zone ${isDragging ? 'dragging' : ''}`}
               onClick={handleUploadClick}
             >
@@ -1445,8 +2984,8 @@ function App() {
               <FolderOpen className="empty-icon" size={48} />
               <p className="drag-text-main">No files or folders found</p>
               <p className="drag-text-sub">
-                {!sharedFolderRootId 
-                  ? "Select files or drag them above to start uploading to your storage!" 
+                {!sharedFolderRootId
+                  ? "Select files or drag them above to start uploading to your storage!"
                   : "This shared folder is empty."
                 }
               </p>
@@ -1456,8 +2995,8 @@ function App() {
             <div className="files-grid">
               {/* Folder list */}
               {activeCategory === 'all' && !searchQuery && folders.map(folder => (
-                <div 
-                  key={folder.id} 
+                <div
+                  key={folder.id}
                   className="file-card glass-card"
                   onClick={() => setCurrentFolderId(folder.id)}
                   style={{ cursor: 'pointer' }}
@@ -1477,7 +3016,7 @@ function App() {
                   <div className="file-card-actions" style={{ marginTop: '12px', paddingTop: '12px' }}>
                     {!sharedFolderRootId ? (
                       <>
-                        <button 
+                        <button
                           className="file-action-btn"
                           onClick={(e) => openShareModal(e, folder, 'folder')}
                           title="Share Folder"
@@ -1485,7 +3024,7 @@ function App() {
                         >
                           <Share2 size={14} />
                         </button>
-                        <button 
+                        <button
                           className="file-action-btn btn-delete"
                           onClick={(e) => handleDeleteFolder(e, folder.id, folder.name)}
                           title="Delete Folder"
@@ -1502,17 +3041,17 @@ function App() {
 
               {/* Files list */}
               {files.map(file => (
-                <div 
-                  key={file.id} 
+                <div
+                  key={file.id}
                   className="file-card glass-card"
                   onClick={() => file.category === 'audio' ? playTrack(file) : setPreviewFile(file)}
                   style={{ cursor: 'pointer' }}
                 >
                   <div className="file-card-preview">
                     {file.category === 'images' ? (
-                      <img 
-                        src={`${API_BASE}/api/files/download/${file.id}`} 
-                        alt={file.originalName} 
+                      <img
+                        src={`${API_BASE}/api/files/download/${file.id}`}
+                        alt={file.originalName}
                         className="file-card-image"
                         loading="lazy"
                       />
@@ -1539,7 +3078,7 @@ function App() {
                     </div>
                   </div>
                   <div className="file-card-actions">
-                    <button 
+                    <button
                       className="file-action-btn"
                       onClick={(e) => { e.stopPropagation(); file.category === 'audio' ? playTrack(file) : setPreviewFile(file); }}
                       title="Preview File"
@@ -1548,7 +3087,7 @@ function App() {
                     </button>
                     {file.category === 'audio' && !sharedFolderRootId && (
                       <>
-                        <button 
+                        <button
                           className="file-action-btn"
                           onClick={(e) => { e.stopPropagation(); openTagger(file); }}
                           title="Edit Tags / Tagger"
@@ -1556,7 +3095,7 @@ function App() {
                         >
                           <Tag size={14} />
                         </button>
-                        <button 
+                        <button
                           className="file-action-btn"
                           onClick={(e) => { e.stopPropagation(); openDistribute(file); }}
                           title="Release / Distribute Music"
@@ -1566,7 +3105,7 @@ function App() {
                         </button>
                       </>
                     )}
-                    <button 
+                    <button
                       className="file-action-btn"
                       onClick={(e) => handleDownload(e, file)}
                       title="Download File"
@@ -1575,7 +3114,7 @@ function App() {
                     </button>
                     {!sharedFolderRootId && (
                       <>
-                        <button 
+                        <button
                           className="file-action-btn"
                           onClick={(e) => openShareModal(e, file)}
                           title="Share File"
@@ -1583,7 +3122,7 @@ function App() {
                         >
                           <Share2 size={14} />
                         </button>
-                        <button 
+                        <button
                           className="file-action-btn btn-delete"
                           onClick={(e) => handleDelete(e, file.id)}
                           title="Delete File"
@@ -1611,8 +3150,8 @@ function App() {
                 <tbody>
                   {/* Folders row list */}
                   {activeCategory === 'all' && !searchQuery && folders.map(folder => (
-                    <tr 
-                      key={folder.id} 
+                    <tr
+                      key={folder.id}
                       className="files-list-row"
                       onClick={() => setCurrentFolderId(folder.id)}
                       style={{ cursor: 'pointer' }}
@@ -1633,7 +3172,7 @@ function App() {
                         <div className="list-actions-cell" onClick={(e) => e.stopPropagation()}>
                           {!sharedFolderRootId ? (
                             <>
-                              <button 
+                              <button
                                 className="file-action-btn"
                                 onClick={(e) => openShareModal(e, folder, 'folder')}
                                 title="Share Folder"
@@ -1641,7 +3180,7 @@ function App() {
                               >
                                 <Share2 size={14} />
                               </button>
-                              <button 
+                              <button
                                 className="file-action-btn btn-delete"
                                 onClick={(e) => handleDeleteFolder(e, folder.id, folder.name)}
                                 title="Delete Folder"
@@ -1659,8 +3198,8 @@ function App() {
 
                   {/* Files row list */}
                   {files.map(file => (
-                    <tr 
-                      key={file.id} 
+                    <tr
+                      key={file.id}
                       className="files-list-row"
                       onClick={() => file.category === 'audio' ? playTrack(file) : setPreviewFile(file)}
                       style={{ cursor: 'pointer' }}
@@ -1686,7 +3225,7 @@ function App() {
                       <td className="list-date-cell">{new Date(file.uploadDate).toLocaleDateString()}</td>
                       <td>
                         <div className="list-actions-cell" onClick={(e) => e.stopPropagation()}>
-                          <button 
+                          <button
                             className="file-action-btn"
                             onClick={() => file.category === 'audio' ? playTrack(file) : setPreviewFile(file)}
                             title="Preview File"
@@ -1695,7 +3234,7 @@ function App() {
                           </button>
                           {file.category === 'audio' && !sharedFolderRootId && (
                             <>
-                              <button 
+                              <button
                                 className="file-action-btn"
                                 onClick={() => openTagger(file)}
                                 title="Edit Tags / Tagger"
@@ -1703,7 +3242,7 @@ function App() {
                               >
                                 <Tag size={14} />
                               </button>
-                              <button 
+                              <button
                                 className="file-action-btn"
                                 onClick={() => openDistribute(file)}
                                 title="Release / Distribute Music"
@@ -1713,7 +3252,7 @@ function App() {
                               </button>
                             </>
                           )}
-                          <button 
+                          <button
                             className="file-action-btn"
                             onClick={(e) => handleDownload(e, file)}
                             title="Download File"
@@ -1722,7 +3261,7 @@ function App() {
                           </button>
                           {!sharedFolderRootId && (
                             <>
-                              <button 
+                              <button
                                 className="file-action-btn"
                                 onClick={(e) => openShareModal(e, file)}
                                 title="Share File"
@@ -1730,7 +3269,7 @@ function App() {
                               >
                                 <Share2 size={14} />
                               </button>
-                              <button 
+                              <button
                                 className="file-action-btn btn-delete"
                                 onClick={(e) => handleDelete(e, file.id)}
                                 title="Delete File"
@@ -1747,6 +3286,8 @@ function App() {
               </table>
             </div>
           )}
+            </>
+          )}
         </section>
 
         {/* Upload Queue Overlay/Panel */}
@@ -1755,7 +3296,7 @@ function App() {
             <div className="queue-header">
               <span className="queue-title">Upload Queue ({uploads.length})</span>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <button 
+                <button
                   onClick={handleRemoveFinished}
                   style={{ background: 'transparent', border: 'none', color: 'var(--accent-indigo)', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 600 }}
                   title="Clear finished items"
@@ -1794,7 +3335,7 @@ function App() {
                   </div>
 
                   <div className="queue-progress-bar-bg">
-                    <div 
+                    <div
                       className={`queue-progress-bar-fill status-${upload.status}`}
                       style={{ width: `${upload.progress}%` }}
                     ></div>
@@ -1838,17 +3379,17 @@ function App() {
 
               <div className="modal-body">
                 {previewFile.category === 'images' && (
-                  <img 
-                    src={`${API_BASE}/api/files/download/${previewFile.id}`} 
-                    alt={previewFile.originalName} 
+                  <img
+                    src={`${API_BASE}/api/files/download/${previewFile.id}`}
+                    alt={previewFile.originalName}
                     className="preview-image"
                   />
                 )}
 
                 {previewFile.category === 'videos' && (
-                  <video 
-                    src={`${API_BASE}/api/files/download/${previewFile.id}`} 
-                    controls 
+                  <video
+                    src={`${API_BASE}/api/files/download/${previewFile.id}`}
+                    controls
                     autoPlay
                     className="preview-video"
                   />
@@ -1859,9 +3400,9 @@ function App() {
                     <div className="audio-disk playing">
                       <Music size={40} />
                     </div>
-                    <audio 
-                      src={`${API_BASE}/api/files/download/${previewFile.id}`} 
-                      controls 
+                    <audio
+                      src={`${API_BASE}/api/files/download/${previewFile.id}`}
+                      controls
                       autoPlay
                       className="preview-audio"
                     />
@@ -1869,29 +3410,29 @@ function App() {
                 )}
 
                 {/* Text documents & code */}
-                {(previewFile.mimeType.startsWith('text/') || 
-                  previewFile.mimeType === 'application/json' || 
+                {(previewFile.mimeType.startsWith('text/') ||
+                  previewFile.mimeType === 'application/json' ||
                   previewFile.mimeType === 'application/javascript') && (
-                  <pre className="preview-text">
-                    {textContent}
-                  </pre>
-                )}
+                    <pre className="preview-text">
+                      {textContent}
+                    </pre>
+                  )}
 
                 {/* Fallback for files that cannot be viewed inline */}
-                {previewFile.category !== 'images' && 
-                 previewFile.category !== 'videos' && 
-                 previewFile.category !== 'audio' && 
-                 !previewFile.mimeType.startsWith('text/') && 
-                 previewFile.mimeType !== 'application/json' && 
-                 previewFile.mimeType !== 'application/javascript' && (
-                  <div className="preview-generic">
-                    <AlertCircle size={48} className="empty-icon" style={{ color: 'var(--accent-indigo)' }} />
-                    <p className="drag-text-main">Preview not supported for this file type</p>
-                    <p className="drag-text-sub">
-                      Type: {previewFile.mimeType || 'unknown'} • Size: {formatBytes(previewFile.size)}
-                    </p>
-                  </div>
-                )}
+                {previewFile.category !== 'images' &&
+                  previewFile.category !== 'videos' &&
+                  previewFile.category !== 'audio' &&
+                  !previewFile.mimeType.startsWith('text/') &&
+                  previewFile.mimeType !== 'application/json' &&
+                  previewFile.mimeType !== 'application/javascript' && (
+                    <div className="preview-generic">
+                      <AlertCircle size={48} className="empty-icon" style={{ color: 'var(--accent-indigo)' }} />
+                      <p className="drag-text-main">Preview not supported for this file type</p>
+                      <p className="drag-text-sub">
+                        Type: {previewFile.mimeType || 'unknown'} • Size: {formatBytes(previewFile.size)}
+                      </p>
+                    </div>
+                  )}
               </div>
 
               <footer className="modal-footer">
@@ -1902,7 +3443,21 @@ function App() {
                 <button className="modal-btn" onClick={() => setPreviewFile(null)}>
                   Close
                 </button>
-                <button 
+                {previewFile.category === 'images' && !sharedFolderRootId && (
+                  <button
+                    className="modal-btn btn-action"
+                    onClick={() => {
+                      setEditorFile(previewFile);
+                      setShowImageEditor(true);
+                      setPreviewFile(null);
+                    }}
+                    style={{ background: 'var(--gradient-accent)', border: 'none' }}
+                  >
+                    <Edit3 size={14} />
+                    Edit Image
+                  </button>
+                )}
+                <button
                   className="modal-btn btn-action"
                   onClick={(e) => handleDownload(e, previewFile)}
                 >
@@ -1931,7 +3486,7 @@ function App() {
                 </p>
 
                 <div style={{ display: 'flex', gap: '10px' }}>
-                  <input 
+                  <input
                     type="url"
                     className="search-input"
                     placeholder="https://example.com/downloads"
@@ -1940,8 +3495,8 @@ function App() {
                     style={{ paddingLeft: '16px' }}
                     onKeyDown={(e) => { if (e.key === 'Enter') handleScrape(); }}
                   />
-                  <button 
-                    className="glow-btn modal-btn btn-action" 
+                  <button
+                    className="glow-btn modal-btn btn-action"
                     onClick={handleScrape}
                     disabled={scraping}
                     style={{ margin: 0, whiteSpace: 'nowrap' }}
@@ -1990,7 +3545,7 @@ function App() {
                               <option key={f.id} value={f.id} style={{ background: '#1e1b4b' }}>{f.name}</option>
                             ))}
                           </select>
-                          <button 
+                          <button
                             onClick={() => handleRemoteDownload(result)}
                             className="modal-btn"
                             disabled={downloadingUrls[result.url] === 'downloading' || downloadingUrls[result.url] === 'completed'}
@@ -2028,7 +3583,7 @@ function App() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
                     <div style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Target URL</span>
-                      <input 
+                      <input
                         type="url"
                         className="search-input"
                         placeholder="https://example.com/downloads"
@@ -2083,8 +3638,8 @@ function App() {
                         <option value="quarterly" style={{ background: '#1e1b4b' }}>Quarterly</option>
                       </select>
                     </div>
-                    <button 
-                      className="glow-btn modal-btn btn-action" 
+                    <button
+                      className="glow-btn modal-btn btn-action"
                       onClick={handleCreateScheduleJob}
                       style={{ margin: 0, alignSelf: 'flex-end', height: '36px' }}
                     >
@@ -2121,7 +3676,7 @@ function App() {
                                 {!job.active && <span style={{ color: 'var(--accent-rose)' }}>Finished (One-time)</span>}
                               </div>
                             </div>
-                            <button 
+                            <button
                               onClick={() => handleDeleteJob(job.id)}
                               className="file-action-btn btn-delete"
                               title="Delete Scheduled Job"
@@ -2149,9 +3704,9 @@ function App() {
         {/* Audio Tagger Modal */}
         {taggerFile && (
           <div className="modal-overlay" onClick={() => setTaggerFile(null)}>
-            <div 
-              className="modal-container glass-panel" 
-              style={{ maxWidth: '900px', width: '90%' }} 
+            <div
+              className="modal-container glass-panel"
+              style={{ maxWidth: '900px', width: '90%' }}
               onClick={(e) => e.stopPropagation()}
             >
               <header className="modal-header">
@@ -2171,12 +3726,12 @@ function App() {
                   {/* Left Panel: Current & Form Tags */}
                   <div className="ytm-tagger-column">
                     <h3 className="ytm-tagger-section-title">Edit Metadata</h3>
-                    
+
                     <div className="ytm-tagger-form">
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Title</label>
-                        <input 
-                          type="text" 
+                        <input
+                          type="text"
                           className="ytm-tagger-input"
                           value={taggerTags.title}
                           onChange={(e) => setTaggerTags(prev => ({ ...prev, title: e.target.value }))}
@@ -2186,8 +3741,8 @@ function App() {
 
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Artist</label>
-                        <input 
-                          type="text" 
+                        <input
+                          type="text"
                           className="ytm-tagger-input"
                           value={taggerTags.artist}
                           onChange={(e) => setTaggerTags(prev => ({ ...prev, artist: e.target.value }))}
@@ -2197,8 +3752,8 @@ function App() {
 
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Album Artist</label>
-                        <input 
-                          type="text" 
+                        <input
+                          type="text"
                           className="ytm-tagger-input"
                           value={taggerTags.albumArtist}
                           onChange={(e) => setTaggerTags(prev => ({ ...prev, albumArtist: e.target.value }))}
@@ -2208,8 +3763,8 @@ function App() {
 
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Album</label>
-                        <input 
-                          type="text" 
+                        <input
+                          type="text"
                           className="ytm-tagger-input"
                           value={taggerTags.album}
                           onChange={(e) => setTaggerTags(prev => ({ ...prev, album: e.target.value }))}
@@ -2219,8 +3774,8 @@ function App() {
 
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Composer</label>
-                        <input 
-                          type="text" 
+                        <input
+                          type="text"
                           className="ytm-tagger-input"
                           value={taggerTags.composer}
                           onChange={(e) => setTaggerTags(prev => ({ ...prev, composer: e.target.value }))}
@@ -2230,8 +3785,8 @@ function App() {
 
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Publisher</label>
-                        <input 
-                          type="text" 
+                        <input
+                          type="text"
                           className="ytm-tagger-input"
                           value={taggerTags.publisher}
                           onChange={(e) => setTaggerTags(prev => ({ ...prev, publisher: e.target.value }))}
@@ -2242,8 +3797,8 @@ function App() {
                       <div style={{ display: 'flex', gap: '12px' }}>
                         <div className="ytm-tagger-row" style={{ flex: 1 }}>
                           <label className="ytm-tagger-label">Year</label>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             className="ytm-tagger-input"
                             value={taggerTags.year}
                             onChange={(e) => setTaggerTags(prev => ({ ...prev, year: e.target.value }))}
@@ -2252,8 +3807,8 @@ function App() {
                         </div>
                         <div className="ytm-tagger-row" style={{ flex: 1 }}>
                           <label className="ytm-tagger-label">Track #</label>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             className="ytm-tagger-input"
                             value={taggerTags.trackNumber}
                             onChange={(e) => setTaggerTags(prev => ({ ...prev, trackNumber: e.target.value }))}
@@ -2265,8 +3820,8 @@ function App() {
                       <div style={{ display: 'flex', gap: '12px' }}>
                         <div className="ytm-tagger-row" style={{ flex: 1 }}>
                           <label className="ytm-tagger-label">Disc #</label>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             className="ytm-tagger-input"
                             value={taggerTags.discNumber}
                             onChange={(e) => setTaggerTags(prev => ({ ...prev, discNumber: e.target.value }))}
@@ -2275,8 +3830,8 @@ function App() {
                         </div>
                         <div className="ytm-tagger-row" style={{ flex: 1 }}>
                           <label className="ytm-tagger-label">BPM</label>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             className="ytm-tagger-input"
                             value={taggerTags.bpm}
                             onChange={(e) => setTaggerTags(prev => ({ ...prev, bpm: e.target.value }))}
@@ -2287,8 +3842,8 @@ function App() {
 
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Genre</label>
-                        <input 
-                          type="text" 
+                        <input
+                          type="text"
                           className="ytm-tagger-input"
                           value={taggerTags.genre}
                           onChange={(e) => setTaggerTags(prev => ({ ...prev, genre: e.target.value }))}
@@ -2298,7 +3853,7 @@ function App() {
 
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Comment</label>
-                        <textarea 
+                        <textarea
                           className="ytm-tagger-input"
                           style={{ resize: 'vertical', minHeight: '60px', fontFamily: 'inherit' }}
                           value={taggerTags.comment}
@@ -2310,8 +3865,8 @@ function App() {
                       <div className="ytm-tagger-row">
                         <label className="ytm-tagger-label">Cover Art Source</label>
                         <div style={{ display: 'flex', gap: '8px' }}>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             className="ytm-tagger-input"
                             style={{ flex: 1 }}
                             value={taggerTags.coverArtUrl.startsWith('data:') ? '[Local Image Loaded]' : taggerTags.coverArtUrl}
@@ -2320,7 +3875,7 @@ function App() {
                             disabled={taggerTags.coverArtUrl.startsWith('data:')}
                           />
                           {taggerTags.coverArtUrl.startsWith('data:') && (
-                            <button 
+                            <button
                               className="file-action-btn btn-delete"
                               style={{ margin: 0, padding: '0 8px', height: '38px', minWidth: '38px' }}
                               onClick={() => setTaggerTags(prev => ({ ...prev, coverArtUrl: '' }))}
@@ -2330,7 +3885,7 @@ function App() {
                               <X size={14} />
                             </button>
                           )}
-                          <button 
+                          <button
                             className="glow-btn"
                             style={{ margin: 0, padding: '0 12px', height: '38px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
                             onClick={() => document.getElementById('local-cover-input').click()}
@@ -2338,7 +3893,7 @@ function App() {
                           >
                             Browse Local...
                           </button>
-                          <button 
+                          <button
                             className="glow-btn"
                             style={{ margin: 0, padding: '0 12px', height: '38px', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
                             onClick={openArchivesPicker}
@@ -2346,7 +3901,7 @@ function App() {
                           >
                             Archives...
                           </button>
-                          <input 
+                          <input
                             type="file"
                             id="local-cover-input"
                             accept="image/*"
@@ -2369,7 +3924,7 @@ function App() {
                           </div>
                         )}
                       </div>
-                      
+
                       {taggerTags.coverArtUrl && (
                         <div className="ytm-tagger-artwork-container">
                           <span style={{ fontSize: '0.75rem', color: 'var(--accent-indigo)' }}>New Match Cover</span>
@@ -2382,10 +3937,10 @@ function App() {
                   {/* Right Panel: MusicBrainz Integration */}
                   <div className="ytm-tagger-column mb-panel">
                     <h3 className="ytm-tagger-section-title">MusicBrainz Search</h3>
-                    
+
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         className="search-input"
                         style={{ paddingLeft: '16px', height: '38px' }}
                         value={mbSearchQuery}
@@ -2393,8 +3948,8 @@ function App() {
                         onKeyDown={(e) => { if (e.key === 'Enter') handleMbSearch(); }}
                         placeholder="Search recording or artist..."
                       />
-                      <button 
-                        className="glow-btn modal-btn btn-action" 
+                      <button
+                        className="glow-btn modal-btn btn-action"
                         onClick={handleMbSearch}
                         disabled={searchingMb}
                         style={{ margin: 0, padding: '0 16px', height: '38px', whiteSpace: 'nowrap' }}
@@ -2410,7 +3965,7 @@ function App() {
                           <span>Contacting MusicBrainz...</span>
                         </div>
                       )}
-                      
+
                       {!searchingMb && mbResults.length === 0 && (
                         <div style={{ textAlign: 'center', padding: '32px 16px', border: '1px dashed var(--glass-border)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
                           Search MusicBrainz database above to fetch correct tags!
@@ -2420,8 +3975,8 @@ function App() {
                       {!searchingMb && mbResults.length > 0 && (
                         <div className="ytm-mb-results-list">
                           {mbResults.map(res => (
-                            <div 
-                              key={res.id} 
+                            <div
+                              key={res.id}
                               className={`ytm-mb-result-item ${selectedMbMatch?.id === res.id ? 'active' : ''}`}
                               onClick={() => handleSelectMbMatch(res)}
                             >
@@ -2434,7 +3989,7 @@ function App() {
                               </div>
                               {res.releases && res.releases.length > 0 && (
                                 <div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  Album: {res.releases[0].title} {res.releases[0].date && `(${res.releases[0].date.substring(0,4)})`}
+                                  Album: {res.releases[0].title} {res.releases[0].date && `(${res.releases[0].date.substring(0, 4)})`}
                                 </div>
                               )}
                             </div>
@@ -2460,7 +4015,7 @@ function App() {
                               )}
                             </div>
                           </div>
-                          
+
                           {fetchingMbCover ? (
                             <div className="comparison-cover-placeholder">
                               <RefreshCw className="spin" size={14} style={{ animation: 'spin 1.5s linear' }} />
@@ -2474,7 +4029,7 @@ function App() {
                           )}
                         </div>
 
-                        <button 
+                        <button
                           className="glow-btn match-apply-btn"
                           onClick={applyMbMatch}
                         >
@@ -2492,7 +4047,7 @@ function App() {
                     * Non-MP3 files: database only metadata edit (physical tagging disabled)
                   </span>
                 ) : (
-                  <button 
+                  <button
                     className="modal-btn"
                     onClick={submitToMusicBrainz}
                     title="Seed this metadata back to MusicBrainz"
@@ -2505,8 +4060,8 @@ function App() {
                 <button className="modal-btn" onClick={() => setTaggerFile(null)}>
                   Cancel
                 </button>
-                <button 
-                  className="modal-btn btn-action" 
+                <button
+                  className="modal-btn btn-action"
                   onClick={handleSaveTags}
                   disabled={savingTags || loadingTaggerData}
                 >
@@ -2527,7 +4082,7 @@ function App() {
                   <X size={18} />
                 </button>
               </header>
-              
+
               <div className="modal-body" style={{ maxHeight: '450px', overflowY: 'auto' }}>
                 {loadingArchivesImages ? (
                   <div style={{ textAlign: 'center', padding: '32px' }}>
@@ -2541,8 +4096,8 @@ function App() {
                 ) : (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', padding: '4px' }}>
                     {archivesImages.map(img => (
-                      <div 
-                        key={img.id} 
+                      <div
+                        key={img.id}
                         className="ytm-archives-img-option"
                         onClick={() => {
                           setTaggerTags(prev => ({
@@ -2552,9 +4107,9 @@ function App() {
                           setShowArchivesPicker(false);
                         }}
                       >
-                        <img 
-                          src={`${API_BASE}/api/files/download/${img.id}`} 
-                          alt={img.originalName} 
+                        <img
+                          src={`${API_BASE}/api/files/download/${img.id}`}
+                          alt={img.originalName}
                         />
                         <div className="name-label" title={img.originalName}>
                           {img.originalName}
@@ -2598,7 +4153,7 @@ function App() {
                   {/* Left Column: Metadata Details */}
                   <div className="ytm-tagger-column" style={{ borderRight: '1px solid rgba(255, 255, 255, 0.05)', paddingRight: '20px' }}>
                     <h3 className="ytm-tagger-section-title">Release Metadata</h3>
-                    
+
                     <div className="ytm-tagger-form" style={{ gap: '10px' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', background: 'rgba(255,255,255,0.02)', padding: '10px', borderRadius: '6px', border: '1px solid var(--glass-border)' }}>
                         <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase' }}>File name</span>
@@ -2626,7 +4181,7 @@ function App() {
                       ))}
                     </div>
 
-                    <button 
+                    <button
                       className="glow-btn"
                       style={{ marginTop: '16px', height: '36px', fontSize: '0.8rem' }}
                       onClick={() => {
@@ -2657,50 +4212,50 @@ Comment: ${distributeTags?.comment || ''}
                   {/* Right Column: Distributors */}
                   <div className="ytm-tagger-column" style={{ paddingLeft: '12px' }}>
                     <h3 className="ytm-tagger-section-title">Select Music Distributor</h3>
-                    
+
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                       {[
-                        { 
-                          name: 'Ditto Music', 
+                        {
+                          name: 'Ditto Music',
                           desc: 'Unlimited distribution to Spotify, Apple Music, TikTok & more. Keep 100% of your royalties.',
                           url: 'https://v2.dittomusic.com/login',
                           color: 'var(--accent-indigo)'
                         },
-                        { 
-                          name: 'Too Lost', 
+                        {
+                          name: 'Too Lost',
                           desc: 'Premium distribution, publishing administration, split sheets, and marketing tools.',
                           url: 'https://dashboard.toolost.com/',
                           color: '#00e575'
                         },
-                        { 
-                          name: 'BandLab Distribution', 
+                        {
+                          name: 'BandLab Distribution',
                           desc: 'Distribute directly from BandLab creator hub to all digital music stores and streaming services.',
                           url: 'https://creator.bandlab.com/',
                           color: '#ff3366'
                         },
-                        { 
-                          name: 'UnitedMasters', 
+                        {
+                          name: 'UnitedMasters',
                           desc: 'Distribute your music, track analytics, and get brand/sync opportunities with NBA, ESPN, etc.',
                           url: 'https://unitedmasters.com/login',
                           color: '#fff'
                         },
-                        { 
-                          name: 'TuneCore', 
+                        {
+                          name: 'TuneCore',
                           desc: 'One of the largest global music distributors. Distribute unlimited releases worldwide.',
                           url: 'https://www.tunecore.com/dashboard',
                           color: '#ffa500'
                         }
                       ].map(platform => (
-                        <div 
-                          key={platform.name} 
-                          className="glass-panel" 
+                        <div
+                          key={platform.name}
+                          className="glass-panel"
                           style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px', border: '1px solid var(--glass-border)', borderRadius: '8px', textAlign: 'left', background: 'rgba(255, 255, 255, 0.01)' }}
                         >
                           <div style={{ display: 'flex', justifyItems: 'center', justifyContent: 'space-between' }}>
                             <span style={{ fontWeight: 700, color: platform.color, fontSize: '0.95rem' }}>{platform.name}</span>
                           </div>
                           <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0, lineHeight: '1.4' }}>{platform.desc}</p>
-                          <button 
+                          <button
                             className="glow-btn"
                             style={{ margin: '8px 0 0 0', height: '34px', fontSize: '0.75rem', alignSelf: 'flex-start', background: 'rgba(255,255,255,0.03)' }}
                             onClick={() => {
@@ -2755,16 +4310,16 @@ Comment: ${distributeTags?.comment || ''}
                 </div>
 
                 <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                  <input 
-                    type="text" 
-                    className="search-input" 
+                  <input
+                    type="text"
+                    className="search-input"
                     readOnly
                     value={`${getShareUrlBase()}/?${shareTargetType === 'folder' ? 'shareFolder' : 'shareFile'}=${shareTarget.id}`}
                     style={{ paddingLeft: '12px', fontSize: '0.85rem' }}
                     onClick={(e) => e.target.select()}
                   />
-                  <button 
-                    className="glow-btn modal-btn btn-action" 
+                  <button
+                    className="glow-btn modal-btn btn-action"
                     style={{ margin: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}
                     onClick={() => {
                       const url = `${getShareUrlBase()}/?${shareTargetType === 'folder' ? 'shareFolder' : 'shareFile'}=${shareTarget.id}`;
@@ -2782,6 +4337,911 @@ Comment: ${distributeTags?.comment || ''}
               <footer className="modal-footer">
                 <button className="modal-btn" onClick={() => setShowShareModal(false)}>
                   Close
+                </button>
+              </footer>
+            </div>
+          </div>
+        )}
+
+        {/* Image Editor Modal Overlay */}
+        {showImageEditor && editorFile && (
+          <div className="image-editor-overlay">
+            <div className="image-editor-container glass-panel">
+              {/* Editor Topbar */}
+              <header className="editor-topbar">
+                <div className="editor-info-block">
+                  <ImageIcon size={18} className="editor-logo-icon" style={{ color: 'var(--accent-indigo)' }} />
+                  <span className="editor-title">Picsart Studio</span>
+                  <span className="editor-divider">|</span>
+                  <span className="editor-filename" title={editorFile.originalName}>{editorFile.originalName}</span>
+                </div>
+                
+                <div className="editor-history-controls">
+                  <button
+                    className="editor-history-btn"
+                    onClick={handleUndo}
+                    disabled={historyIndex <= 0}
+                    title="Undo"
+                  >
+                    <Undo size={15} />
+                  </button>
+                  <button
+                    className="editor-history-btn"
+                    onClick={handleRedo}
+                    disabled={historyIndex >= history.length - 1}
+                    title="Redo"
+                  >
+                    <Redo size={15} />
+                  </button>
+                  <button
+                    className="editor-history-btn"
+                    onClick={handleResetEditor}
+                    title="Reset Edits"
+                  >
+                    <RefreshCw size={14} />
+                  </button>
+                </div>
+
+                <div className="editor-topbar-actions" style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    className="modal-btn"
+                    onClick={() => {
+                      if (window.confirm('Discard all unsaved edits?')) {
+                        setShowImageEditor(false);
+                      }
+                    }}
+                    style={{ background: 'transparent', border: '1px solid var(--glass-border)', margin: 0 }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="glow-btn editor-save-btn"
+                    onClick={() => setSaveModalOpen(true)}
+                    style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '6px', padding: '0 16px', borderRadius: '6px', height: '38px', fontSize: '0.85rem' }}
+                  >
+                    <Save size={14} />
+                    Save Edits
+                  </button>
+                </div>
+              </header>
+
+              {/* Editor Workspace */}
+              <div className="editor-workspace">
+                <div className="editor-canvas-area">
+                  <div className="canvas-scroll-container">
+                    <canvas
+                      ref={canvasRef}
+                      width={canvasWidth}
+                      height={canvasHeight}
+                      onMouseDown={handleMouseDown}
+                      onMouseMove={handleMouseMove}
+                      onMouseUp={handleMouseUp}
+                      onMouseLeave={handleMouseUp}
+                      className={`editor-canvas ${brushMode !== 'off' ? 'canvas-brush-cursor' : 'canvas-normal-cursor'}`}
+                    />
+                  </div>
+                  {(selectedTextId || selectedStickerId) && (
+                    <div className="editor-floating-help">
+                      <Info size={12} />
+                      <span>Drag to position. Use sidebar attributes to style, or click (×) to delete layer.</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Sidebar Menu Panel */}
+                <aside className="editor-sidebar glass-panel">
+                  <div className="editor-sidebar-tabs">
+                    {[
+                      { id: 'adjust', label: 'Adjust', icon: <Sliders size={16} /> },
+                      { id: 'filter', label: 'Filters', icon: <ImageIcon size={16} /> },
+                      { id: 'draw', label: 'Draw', icon: <Edit3 size={16} /> },
+                      { id: 'text', label: 'Text', icon: <Type size={16} /> },
+                      { id: 'shapes', label: 'Shapes', icon: <Plus size={16} /> },
+                      { id: 'resize', label: 'Resize', icon: <Maximize2 size={16} /> }
+                    ].map(tab => (
+                      <button
+                        key={tab.id}
+                        className={`editor-tab-btn ${editorActiveTab === tab.id ? 'active' : ''}`}
+                        onClick={() => setEditorActiveTab(tab.id)}
+                        title={tab.label}
+                      >
+                        {tab.icon}
+                        <span className="tab-label-text">{tab.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="editor-sidebar-content">
+                    {editorActiveTab === 'adjust' && (
+                      <div className="editor-tab-pane">
+                        <h3 className="sidebar-section-title">Color Adjustments</h3>
+                        {[
+                          { label: 'Brightness', min: 0, max: 200, val: brightness, set: setBrightness, unit: '%' },
+                          { label: 'Contrast', min: 0, max: 200, val: contrast, set: setContrast, unit: '%' },
+                          { label: 'Saturation', min: 0, max: 200, val: saturation, set: setSaturation, unit: '%' },
+                          { label: 'Exposure', min: 0, max: 200, val: exposure, set: setExposure, unit: '%' },
+                          { label: 'Hue Rotate', min: 0, max: 360, val: hue, set: setHue, unit: '°' },
+                          { label: 'Blur', min: 0, max: 20, val: blur, set: setBlur, unit: 'px' },
+                          { label: 'Opacity', min: 0, max: 100, val: opacity, set: setOpacity, unit: '%' }
+                        ].map(slider => (
+                          <div key={slider.label} className="editor-control-group">
+                            <div className="control-label-row">
+                              <span className="control-label">{slider.label}</span>
+                              <span className="control-value">{slider.val}{slider.unit}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min={slider.min}
+                              max={slider.max}
+                              value={slider.val}
+                              onChange={(e) => slider.set(parseInt(e.target.value))}
+                              onMouseUp={() => pushHistory(drawings, texts, shapes, {
+                                brightness: slider.label === 'Brightness' ? parseInt(slider.val) : brightness,
+                                contrast: slider.label === 'Contrast' ? parseInt(slider.val) : contrast,
+                                saturation: slider.label === 'Saturation' ? parseInt(slider.val) : saturation,
+                                exposure: slider.label === 'Exposure' ? parseInt(slider.val) : exposure,
+                                hue: slider.label === 'Hue Rotate' ? parseInt(slider.val) : hue,
+                                blur: slider.label === 'Blur' ? parseInt(slider.val) : blur,
+                                opacity: slider.label === 'Opacity' ? parseInt(slider.val) : opacity,
+                                warmth,
+                                selectedFilter
+                              })}
+                              className="editor-range-slider"
+                            />
+                          </div>
+                        ))}
+                        
+                        <div className="editor-control-group">
+                          <div className="control-label-row">
+                            <span className="control-label">Warmth / Temperature</span>
+                            <span className="control-value">{warmth > 0 ? `+${warmth}` : warmth}</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={-50}
+                            max={50}
+                            value={warmth}
+                            onChange={(e) => setWarmth(parseInt(e.target.value))}
+                            onMouseUp={() => pushHistory(drawings, texts, shapes, {
+                              brightness, contrast, saturation, exposure, hue, blur, opacity,
+                              warmth: parseInt(warmth), selectedFilter
+                            })}
+                            className="editor-range-slider"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {editorActiveTab === 'filter' && (
+                      <div className="editor-tab-pane">
+                        <h3 className="sidebar-section-title">Photo Filters</h3>
+                        <div className="editor-filter-grid">
+                          {[
+                            { id: 'none', label: 'Original' },
+                            { id: 'sepia', label: 'Sepia Vintage' },
+                            { id: 'grayscale', label: 'Black & White' },
+                            { id: 'invert', label: 'Invert Color' },
+                            { id: 'vintage', label: 'Retro Warm' },
+                            { id: 'retro', label: 'Vibrant Pop' },
+                            { id: 'cool', label: 'Cool Indigo' },
+                            { id: 'warm', label: 'Amber Glow' },
+                            { id: 'noir', label: 'Dark Noir' }
+                          ].map(filt => (
+                            <button
+                              key={filt.id}
+                              className={`editor-filter-card ${selectedFilter === filt.id ? 'active' : ''}`}
+                              onClick={() => {
+                                setSelectedFilter(filt.id);
+                                pushHistory(drawings, texts, shapes, {
+                                  brightness, contrast, saturation, exposure, hue, blur, opacity, warmth,
+                                  selectedFilter: filt.id
+                                });
+                              }}
+                            >
+                              <div className={`filter-preview-thumbnail filter-mode-${filt.id}`}></div>
+                              <span className="filter-label-text">{filt.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {editorActiveTab === 'draw' && (
+                      <div className="editor-tab-pane">
+                        <h3 className="sidebar-section-title">Brush Draw & Erase</h3>
+                        <div className="editor-mode-toggle-group">
+                          <button
+                            className={`editor-mode-toggle-btn ${brushMode === 'off' ? 'active' : ''}`}
+                            onClick={() => setBrushMode('off')}
+                          >
+                            Selection Mode
+                          </button>
+                          <button
+                            className={`editor-mode-toggle-btn ${brushMode === 'draw' ? 'active' : ''}`}
+                            onClick={() => setBrushMode('draw')}
+                          >
+                            Brush
+                          </button>
+                          <button
+                            className={`editor-mode-toggle-btn ${brushMode === 'erase' ? 'active' : ''}`}
+                            onClick={() => setBrushMode('erase')}
+                          >
+                            Eraser
+                          </button>
+                        </div>
+
+                        {brushMode !== 'off' && (
+                          <>
+                            {brushMode === 'draw' && (
+                              <div className="editor-control-group">
+                                <label className="control-label">Brush Color</label>
+                                <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                                  <input
+                                    type="color"
+                                    value={brushColor}
+                                    onChange={(e) => setBrushColor(e.target.value)}
+                                    className="editor-color-picker"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={brushColor}
+                                    onChange={(e) => setBrushColor(e.target.value)}
+                                    className="search-input"
+                                    style={{ height: '36px', paddingLeft: '12px' }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="editor-control-group">
+                              <div className="control-label-row">
+                                <span className="control-label">{brushMode === 'erase' ? 'Eraser' : 'Brush'} Size</span>
+                                <span className="control-value">{brushSize}px</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={1}
+                                max={100}
+                                value={brushSize}
+                                onChange={(e) => setBrushSize(parseInt(e.target.value))}
+                                className="editor-range-slider"
+                              />
+                            </div>
+
+                            <div className="editor-control-group">
+                              <div className="control-label-row">
+                                <span className="control-label">Opacity</span>
+                                <span className="control-value">{brushOpacity}%</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={1}
+                                max={100}
+                                value={brushOpacity}
+                                onChange={(e) => setBrushOpacity(parseInt(e.target.value))}
+                                className="editor-range-slider"
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {editorActiveTab === 'text' && (
+                      <div className="editor-tab-pane">
+                        <h3 className="sidebar-section-title">Text Overlays</h3>
+                        <div className="editor-control-group">
+                          <textarea
+                            placeholder="Add overlay text..."
+                            value={inputText}
+                            onChange={(e) => {
+                              setInputText(e.target.value);
+                              if (selectedTextId) updateSelectedText('text', e.target.value);
+                            }}
+                            onBlur={() => {
+                              if (selectedTextId) commitSelectedTextHistory();
+                            }}
+                            className="search-input"
+                            style={{ height: '80px', borderRadius: '8px', padding: '12px', resize: 'vertical' }}
+                          />
+                          {!selectedTextId && (
+                            <button
+                              className="glow-btn"
+                              onClick={handleAddText}
+                              style={{ width: '100%', marginTop: '8px', height: '36px', fontSize: '0.85rem' }}
+                            >
+                              <Plus size={14} /> Add Text Layer
+                            </button>
+                          )}
+                        </div>
+
+                        {selectedTextId && (
+                          <>
+                            <div className="editor-control-group">
+                              <label className="control-label">Font Family</label>
+                              <select
+                                value={texts.find(t => t.id === selectedTextId)?.fontFamily || 'Outfit'}
+                                onChange={(e) => {
+                                  updateSelectedText('fontFamily', e.target.value);
+                                  commitSelectedTextHistory();
+                                }}
+                                className="editor-select"
+                              >
+                                <option value="Outfit">Outfit</option>
+                                <option value="Plus Jakarta Sans">Plus Jakarta</option>
+                                <option value="monospace">Monospace</option>
+                                <option value="serif">Serif</option>
+                                <option value="sans-serif">Sans Serif</option>
+                                <option value="cursive">Cursive</option>
+                              </select>
+                            </div>
+
+                            <div className="editor-control-group">
+                              <div className="control-label-row">
+                                <span className="control-label">Font Size</span>
+                                <span className="control-value">{texts.find(t => t.id === selectedTextId)?.fontSize || 36}px</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={8}
+                                max={150}
+                                value={texts.find(t => t.id === selectedTextId)?.fontSize || 36}
+                                onChange={(e) => updateSelectedText('fontSize', parseInt(e.target.value))}
+                                onMouseUp={commitSelectedTextHistory}
+                                className="editor-range-slider"
+                              />
+                            </div>
+
+                            <div className="editor-control-group">
+                              <div className="control-label-row">
+                                <span className="control-label">Rotation Angle</span>
+                                <span className="control-value">{texts.find(t => t.id === selectedTextId)?.angle || 0}°</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={360}
+                                value={texts.find(t => t.id === selectedTextId)?.angle || 0}
+                                onChange={(e) => updateSelectedText('angle', parseInt(e.target.value))}
+                                onMouseUp={commitSelectedTextHistory}
+                                className="editor-range-slider"
+                              />
+                            </div>
+
+                            <div className="editor-control-group">
+                              <div className="control-label-row">
+                                <span className="control-label">Layer Opacity</span>
+                                <span className="control-value">{texts.find(t => t.id === selectedTextId)?.opacity || 100}%</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={1}
+                                max={100}
+                                value={texts.find(t => t.id === selectedTextId)?.opacity || 100}
+                                onChange={(e) => updateSelectedText('opacity', parseInt(e.target.value))}
+                                onMouseUp={commitSelectedTextHistory}
+                                className="editor-range-slider"
+                              />
+                            </div>
+
+                            <div className="editor-control-group">
+                              <label className="control-label">Text Color</label>
+                              <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                                <input
+                                  type="color"
+                                  value={texts.find(t => t.id === selectedTextId)?.color || '#ffffff'}
+                                  onChange={(e) => updateSelectedText('color', e.target.value)}
+                                  onBlur={commitSelectedTextHistory}
+                                  className="editor-color-picker"
+                                />
+                                <input
+                                  type="text"
+                                  value={texts.find(t => t.id === selectedTextId)?.color || '#ffffff'}
+                                  onChange={(e) => updateSelectedText('color', e.target.value)}
+                                  onBlur={commitSelectedTextHistory}
+                                  className="search-input"
+                                  style={{ height: '36px', paddingLeft: '12px' }}
+                                />
+                              </div>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                              <button
+                                className={`editor-mode-toggle-btn ${texts.find(t => t.id === selectedTextId)?.bold ? 'active' : ''}`}
+                                onClick={() => {
+                                  const current = texts.find(t => t.id === selectedTextId)?.bold;
+                                  updateSelectedText('bold', !current);
+                                  commitSelectedTextHistory();
+                                }}
+                                style={{ flex: 1 }}
+                              >
+                                Bold
+                              </button>
+                              <button
+                                className={`editor-mode-toggle-btn ${texts.find(t => t.id === selectedTextId)?.italic ? 'active' : ''}`}
+                                onClick={() => {
+                                  const current = texts.find(t => t.id === selectedTextId)?.italic;
+                                  updateSelectedText('italic', !current);
+                                  commitSelectedTextHistory();
+                                }}
+                                style={{ flex: 1 }}
+                              >
+                                Italic
+                              </button>
+                            </div>
+
+                            <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '16px 0' }} />
+
+                            <h4 style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-indigo)', marginBottom: '8px' }}>Text Border Outline</h4>
+                            <div className="editor-control-group">
+                              <div className="control-label-row">
+                                <span className="control-label">Outline Stroke Width</span>
+                                <span className="control-value">{texts.find(t => t.id === selectedTextId)?.borderWidth || 0}px</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={15}
+                                value={texts.find(t => t.id === selectedTextId)?.borderWidth || 0}
+                                onChange={(e) => updateSelectedText('borderWidth', parseInt(e.target.value))}
+                                onMouseUp={commitSelectedTextHistory}
+                                className="editor-range-slider"
+                              />
+                            </div>
+
+                            <div className="editor-control-group">
+                              <label className="control-label">Outline Color</label>
+                              <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                                <input
+                                  type="color"
+                                  value={texts.find(t => t.id === selectedTextId)?.borderColor || '#000000'}
+                                  onChange={(e) => updateSelectedText('borderColor', e.target.value)}
+                                  onBlur={commitSelectedTextHistory}
+                                  className="editor-color-picker"
+                                />
+                                <input
+                                  type="text"
+                                  value={texts.find(t => t.id === selectedTextId)?.borderColor || '#000000'}
+                                  onChange={(e) => updateSelectedText('borderColor', e.target.value)}
+                                  onBlur={commitSelectedTextHistory}
+                                  className="search-input"
+                                  style={{ height: '36px', paddingLeft: '12px' }}
+                                />
+                              </div>
+                            </div>
+
+                            <button
+                              className="modal-btn btn-action btn-delete"
+                              onClick={() => {
+                                const updated = texts.filter(t => t.id !== selectedTextId);
+                                setTexts(updated);
+                                setSelectedTextId(null);
+                                pushHistory(drawings, updated, shapes, getAdjustmentsState());
+                              }}
+                              style={{ width: '100%', marginTop: '12px', height: '36px', fontSize: '0.85rem' }}
+                            >
+                              Delete Text Layer
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {editorActiveTab === 'shapes' && (
+                      <div className="editor-tab-pane">
+                        <h3 className="sidebar-section-title">Stickers & Vector Shapes</h3>
+                        <div className="editor-shapes-presets">
+                          <button className="editor-shape-btn" onClick={() => handleAddShape('rect')}>Rectangle</button>
+                          <button className="editor-shape-btn" onClick={() => handleAddShape('circle')}>Circle</button>
+                          <button className="editor-shape-btn" onClick={() => handleAddShape('line')}>Line</button>
+                          <button className="editor-shape-btn" onClick={() => handleAddShape('arrow')}>Arrow</button>
+                        </div>
+
+                        <h4 style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-indigo)', margin: '16px 0 8px 0' }}>Stickers / Emojis</h4>
+                        <div className="editor-stickers-grid">
+                          {['🔥', '🚀', '❤️', '😂', '👍', '🎉', '⭐', '💡', '💎', '🍀', '✨', '⚡', '💥', '🎨', '📸', '🎵', '👽', '👑', '🌈', '💀'].map(emoji => (
+                            <button
+                              key={emoji}
+                              className="editor-sticker-option"
+                              onClick={() => handleAddSticker(emoji)}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+
+                        {selectedStickerId && (
+                          <>
+                            <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '16px 0' }} />
+                            <h4 style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-indigo)', marginBottom: '8px' }}>Layer Properties</h4>
+                            
+                            <div className="editor-control-group">
+                              <div className="control-label-row">
+                                <span className="control-label">Width Size</span>
+                                <span className="control-value">{shapes.find(s => s.id === selectedStickerId)?.width || 100}px</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={10}
+                                max={500}
+                                value={shapes.find(s => s.id === selectedStickerId)?.width || 100}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  const targetShape = shapes.find(s => s.id === selectedStickerId);
+                                  if (targetShape && !['rect', 'circle', 'line', 'arrow'].includes(targetShape.type)) {
+                                    updateSelectedShape('width', val);
+                                    updateSelectedShape('height', val);
+                                  } else {
+                                    updateSelectedShape('width', val);
+                                  }
+                                }}
+                                onMouseUp={commitSelectedShapeHistory}
+                                className="editor-range-slider"
+                              />
+                            </div>
+
+                            {['rect', 'circle', 'line', 'arrow'].includes(shapes.find(s => s.id === selectedStickerId)?.type) && (
+                              <div className="editor-control-group">
+                                <div className="control-label-row">
+                                  <span className="control-label">Height Size</span>
+                                  <span className="control-value">{shapes.find(s => s.id === selectedStickerId)?.height || 100}px</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={10}
+                                  max={500}
+                                  value={shapes.find(s => s.id === selectedStickerId)?.height || 100}
+                                  onChange={(e) => updateSelectedShape('height', parseInt(e.target.value))}
+                                  onMouseUp={commitSelectedShapeHistory}
+                                  className="editor-range-slider"
+                                />
+                              </div>
+                            )}
+
+                            <div className="editor-control-group">
+                              <div className="control-label-row">
+                                <span className="control-label">Rotation Angle</span>
+                                <span className="control-value">{shapes.find(s => s.id === selectedStickerId)?.angle || 0}°</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={360}
+                                value={shapes.find(s => s.id === selectedStickerId)?.angle || 0}
+                                onChange={(e) => updateSelectedShape('angle', parseInt(e.target.value))}
+                                onMouseUp={commitSelectedShapeHistory}
+                                className="editor-range-slider"
+                              />
+                            </div>
+
+                            <div className="editor-control-group">
+                              <div className="control-label-row">
+                                <span className="control-label">Opacity</span>
+                                <span className="control-value">{shapes.find(s => s.id === selectedStickerId)?.opacity || 100}%</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={1}
+                                max={100}
+                                value={shapes.find(s => s.id === selectedStickerId)?.opacity || 100}
+                                onChange={(e) => updateSelectedShape('opacity', parseInt(e.target.value))}
+                                onMouseUp={commitSelectedShapeHistory}
+                                className="editor-range-slider"
+                              />
+                            </div>
+
+                            {['rect', 'circle', 'line', 'arrow'].includes(shapes.find(s => s.id === selectedStickerId)?.type) && (
+                              <>
+                                <div className="editor-control-group">
+                                  <div className="control-label-row">
+                                    <span className="control-label">Line Thickness</span>
+                                    <span className="control-value">{shapes.find(s => s.id === selectedStickerId)?.strokeWidth || 4}px</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={20}
+                                    value={shapes.find(s => s.id === selectedStickerId)?.strokeWidth || 4}
+                                    onChange={(e) => updateSelectedShape('strokeWidth', parseInt(e.target.value))}
+                                    onMouseUp={commitSelectedShapeHistory}
+                                    className="editor-range-slider"
+                                  />
+                                </div>
+
+                                <div className="editor-control-group">
+                                  <label className="control-label">Border/Line Color</label>
+                                  <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                                    <input
+                                      type="color"
+                                      value={shapes.find(s => s.id === selectedStickerId)?.strokeColor || '#6366f1'}
+                                      onChange={(e) => updateSelectedShape('strokeColor', e.target.value)}
+                                      onBlur={commitSelectedShapeHistory}
+                                      className="editor-color-picker"
+                                    />
+                                    <input
+                                      type="text"
+                                      value={shapes.find(s => s.id === selectedStickerId)?.strokeColor || '#6366f1'}
+                                      onChange={(e) => updateSelectedShape('strokeColor', e.target.value)}
+                                      onBlur={commitSelectedShapeHistory}
+                                      className="search-input"
+                                      style={{ height: '36px', paddingLeft: '12px' }}
+                                    />
+                                  </div>
+                                </div>
+
+                                {['rect', 'circle'].includes(shapes.find(s => s.id === selectedStickerId)?.type) && (
+                                  <div className="editor-control-group">
+                                    <label className="control-label">Fill Color</label>
+                                    <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                                      <input
+                                        type="color"
+                                        value={shapes.find(s => s.id === selectedStickerId)?.fillColor === 'transparent' ? '#ffffff' : shapes.find(s => s.id === selectedStickerId)?.fillColor}
+                                        disabled={shapes.find(s => s.id === selectedStickerId)?.fillColor === 'transparent'}
+                                        onChange={(e) => updateSelectedShape('fillColor', e.target.value)}
+                                        onBlur={commitSelectedShapeHistory}
+                                        className="editor-color-picker"
+                                      />
+                                      <button
+                                        className={`editor-mode-toggle-btn ${shapes.find(s => s.id === selectedStickerId)?.fillColor === 'transparent' ? 'active' : ''}`}
+                                        onClick={() => {
+                                          const currentVal = shapes.find(s => s.id === selectedStickerId)?.fillColor;
+                                          updateSelectedShape('fillColor', currentVal === 'transparent' ? '#6366f1' : 'transparent');
+                                          commitSelectedShapeHistory();
+                                        }}
+                                        style={{ margin: 0, padding: '0 12px', fontSize: '0.85rem' }}
+                                      >
+                                        No Fill (Transparent)
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            <button
+                              className="modal-btn btn-action btn-delete"
+                              onClick={() => {
+                                const updated = shapes.filter(s => s.id !== selectedStickerId);
+                                setShapes(updated);
+                                setSelectedStickerId(null);
+                                pushHistory(drawings, texts, updated, getAdjustmentsState());
+                              }}
+                              style={{ width: '100%', marginTop: '12px', height: '36px', fontSize: '0.85rem' }}
+                            >
+                              Delete Layer
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {editorActiveTab === 'resize' && (
+                      <div className="editor-tab-pane">
+                        <h3 className="sidebar-section-title">Picture Resizer Studio</h3>
+                        <div className="editor-control-group">
+                          <label className="control-label">Width (px)</label>
+                          <input
+                            type="number"
+                            className="search-input"
+                            style={{ paddingLeft: '12px', marginTop: '6px' }}
+                            value={resizeWidth}
+                            onChange={(e) => handleResizeWidthChange(parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+
+                        <div className="editor-control-group">
+                          <label className="control-label">Height (px)</label>
+                          <input
+                            type="number"
+                            className="search-input"
+                            style={{ paddingLeft: '12px', marginTop: '6px' }}
+                            value={resizeHeight}
+                            onChange={(e) => handleResizeHeightChange(parseInt(e.target.value) || 0)}
+                          />
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '12px 0' }}>
+                          <input
+                            type="checkbox"
+                            id="aspect-lock"
+                            checked={aspectRatioLock}
+                            onChange={(e) => setAspectRatioLock(e.target.checked)}
+                            style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                          />
+                          <label htmlFor="aspect-lock" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                            Lock Aspect Ratio ({canvasWidth && canvasHeight ? (canvasWidth / canvasHeight).toFixed(2) : '1.00'})
+                          </label>
+                        </div>
+
+                        <div className="presets-section" style={{ marginTop: '16px' }}>
+                          <h4 style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-indigo)', marginBottom: '8px' }}>Presets</h4>
+                          <div className="editor-shapes-presets" style={{ gap: '8px' }}>
+                            <button className="editor-shape-btn" onClick={() => { setAspectRatioLock(false); setResizeWidth(1080); setResizeHeight(1080); }}>1080p Square (1:1)</button>
+                            <button className="editor-shape-btn" onClick={() => { setAspectRatioLock(false); setResizeWidth(1920); setResizeHeight(1080); }}>1080p HDTV (16:9)</button>
+                            <button className="editor-shape-btn" onClick={() => { setAspectRatioLock(false); setResizeWidth(1080); setResizeHeight(1920); }}>9:16 Portrait</button>
+                            <button className="editor-shape-btn" onClick={() => { setAspectRatioLock(false); setResizeWidth(800); setResizeHeight(600); }}>800x600 SVGA</button>
+                          </div>
+                        </div>
+
+                        <div className="presets-section" style={{ marginTop: '16px' }}>
+                          <h4 style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-indigo)', marginBottom: '8px' }}>Scale Percentage</h4>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
+                            {[25, 50, 75, 150, 200].map(pct => (
+                              <button
+                                key={pct}
+                                className="editor-shape-btn"
+                                style={{ padding: '6px 0', fontSize: '0.75rem', textAlign: 'center' }}
+                                onClick={() => applyPercentScale(pct)}
+                              >
+                                {pct}%
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <button
+                          className="glow-btn"
+                          style={{ width: '100%', marginTop: '20px', height: '38px', fontSize: '0.85rem' }}
+                          onClick={handleApplyResize}
+                        >
+                          Apply New Resolution
+                        </button>
+
+                        <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '24px 0 16px 0' }} />
+
+                        <h3 className="sidebar-section-title">Center Crop Presets</h3>
+                        <div className="editor-shapes-presets" style={{ gap: '8px' }}>
+                          <button className="editor-shape-btn" onClick={() => handleCropImage('1:1')}>Crop 1:1 Square</button>
+                          <button className="editor-shape-btn" onClick={() => handleCropImage('4:3')}>Crop 4:3</button>
+                          <button className="editor-shape-btn" onClick={() => handleCropImage('16:9')}>Crop 16:9 HDTV</button>
+                          <button className="editor-shape-btn" onClick={() => handleCropImage('3:2')}>Crop 3:2 Photo</button>
+                        </div>
+
+                        <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '24px 0 16px 0' }} />
+
+                        <h3 className="sidebar-section-title">Rotate & Flip</h3>
+                        <div className="editor-shapes-presets" style={{ gap: '8px' }}>
+                          <button className="editor-shape-btn" onClick={handleRotateImage} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                            <RotateCw size={14} /> Rotate 90°
+                          </button>
+                          <button className="editor-shape-btn" onClick={handleFlipHorizontal} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                            <FlipHorizontal size={14} /> Flip Horiz
+                          </button>
+                          <button className="editor-shape-btn" onClick={handleFlipVertical} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                            <FlipVertical size={14} /> Flip Vert
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </aside>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Save Settings Modal Popup Dialog */}
+        {saveModalOpen && (
+          <div className="modal-overlay" style={{ zIndex: 1200 }} onClick={() => setSaveModalOpen(false)}>
+            <div className="modal-container glass-panel" style={{ maxWidth: '450px' }} onClick={(e) => e.stopPropagation()}>
+              <header className="modal-header">
+                <span className="modal-title-text" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Save size={18} style={{ color: 'var(--accent-indigo)' }} />
+                  Save Studio Output
+                </span>
+                <button className="modal-close-btn" onClick={() => setSaveModalOpen(false)}>
+                  <X size={18} />
+                </button>
+              </header>
+
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px', textAlign: 'left' }}>
+                <div className="editor-control-group">
+                  <label className="control-label" style={{ fontWeight: 600, color: '#fff' }}>Save Destination</label>
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
+                    <button
+                      className={`editor-mode-toggle-btn ${!saveAsCopy ? 'active' : ''}`}
+                      onClick={() => setSaveAsCopy(false)}
+                      style={{ flex: 1, height: '36px' }}
+                    >
+                      Overwrite Original
+                    </button>
+                    <button
+                      className={`editor-mode-toggle-btn ${saveAsCopy ? 'active' : ''}`}
+                      onClick={() => setSaveAsCopy(true)}
+                      style={{ flex: 1, height: '36px' }}
+                    >
+                      Save as Copy
+                    </button>
+                  </div>
+                </div>
+
+                {saveAsCopy && (
+                  <div className="editor-control-group">
+                    <label className="control-label">File Copy Name</label>
+                    <input
+                      type="text"
+                      className="search-input"
+                      value={newFileName}
+                      onChange={(e) => setNewFileName(e.target.value)}
+                      placeholder="example_edited.png"
+                      style={{ paddingLeft: '12px', marginTop: '6px' }}
+                    />
+                  </div>
+                )}
+
+                <div className="editor-control-group">
+                  <label className="control-label" style={{ fontWeight: 600, color: '#fff' }}>Image File Format</label>
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
+                    <button
+                      className={`editor-mode-toggle-btn ${saveFormat === 'png' ? 'active' : ''}`}
+                      onClick={() => setSaveFormat('png')}
+                      style={{ flex: 1, height: '36px' }}
+                    >
+                      PNG (Lossless)
+                    </button>
+                    <button
+                      className={`editor-mode-toggle-btn ${saveFormat === 'jpeg' ? 'active' : ''}`}
+                      onClick={() => setSaveFormat('jpeg')}
+                      style={{ flex: 1, height: '36px' }}
+                    >
+                      JPEG (Compressed)
+                    </button>
+                  </div>
+                </div>
+
+                {saveFormat === 'jpeg' && (
+                  <div className="editor-control-group">
+                    <div className="control-label-row">
+                      <span className="control-label">JPEG Compression Quality</span>
+                      <span className="control-value">{Math.round(jpegQuality * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.1}
+                      max={1.0}
+                      step={0.05}
+                      value={jpegQuality}
+                      onChange={(e) => setJpegQuality(parseFloat(e.target.value))}
+                      className="editor-range-slider"
+                    />
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '6px', border: '1px solid var(--glass-border)', fontSize: '0.85rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Canvas Dimensions:</span>
+                    <span style={{ color: '#fff', fontWeight: 600 }}>{canvasWidth} × {canvasHeight} px</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Estimated Output Size:</span>
+                    <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>{estimatedSize}</span>
+                  </div>
+                </div>
+              </div>
+
+              <footer className="modal-footer" style={{ gap: '10px' }}>
+                <button
+                  className="modal-btn"
+                  style={{ border: '1px solid var(--glass-border)', background: 'transparent', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}
+                  onClick={handleLocalDownload}
+                  title="Download directly to your local computer"
+                >
+                  <Download size={14} />
+                  Download Local
+                </button>
+                
+                <div style={{ flexGrow: 1 }} />
+                
+                <button className="modal-btn" onClick={() => setSaveModalOpen(false)} style={{ margin: 0 }}>
+                  Cancel
+                </button>
+                <button
+                  className="modal-btn btn-action"
+                  onClick={handleSaveImage}
+                  disabled={editorSaving}
+                  style={{ margin: 0 }}
+                >
+                  {editorSaving ? 'Saving Edits...' : 'Save to Cloud'}
                 </button>
               </footer>
             </div>
@@ -2829,7 +5289,7 @@ Comment: ${distributeTags?.comment || ''}
                 <SkipForward size={18} fill="currentColor" />
               </button>
             </div>
-            
+
             <div className="ytm-progress-bar-wrapper">
               <span className="ytm-time-text">{formatTime(currentTime)}</span>
               <input
@@ -2846,16 +5306,16 @@ Comment: ${distributeTags?.comment || ''}
 
           {/* Right Extra Actions (loop, shuffle, volume) */}
           <div className="ytm-extra-controls">
-            <button 
-              className={`ytm-extra-btn ${isLooping ? 'active' : ''}`} 
-              onClick={() => setIsLooping(!isLooping)} 
+            <button
+              className={`ytm-extra-btn ${isLooping ? 'active' : ''}`}
+              onClick={() => setIsLooping(!isLooping)}
               title={isLooping ? "Repeat: On" : "Repeat: Off"}
             >
               <Repeat size={16} />
             </button>
-            <button 
-              className={`ytm-extra-btn ${isShuffled ? 'active' : ''}`} 
-              onClick={() => setIsShuffled(!isShuffled)} 
+            <button
+              className={`ytm-extra-btn ${isShuffled ? 'active' : ''}`}
+              onClick={() => setIsShuffled(!isShuffled)}
               title={isShuffled ? "Shuffle: On" : "Shuffle: Off"}
             >
               <Shuffle size={16} />
@@ -2877,9 +5337,9 @@ Comment: ${distributeTags?.comment || ''}
             </div>
 
             {/* Expand Player */}
-            <button 
-              className="ytm-extra-btn" 
-              onClick={() => setIsPlayerExpanded(true)} 
+            <button
+              className="ytm-extra-btn"
+              onClick={() => setIsPlayerExpanded(true)}
               title="Expand Player"
               style={{ opacity: 0.7 }}
             >
@@ -2887,13 +5347,13 @@ Comment: ${distributeTags?.comment || ''}
             </button>
 
             {/* Close/Close Player */}
-            <button 
-              className="ytm-extra-btn" 
+            <button
+              className="ytm-extra-btn"
               onClick={() => {
                 if (audioRef.current) audioRef.current.pause();
                 setIsPlaying(false);
                 setActiveAudioTrack(null);
-              }} 
+              }}
               title="Close Player"
               style={{ marginLeft: '8px', opacity: 0.7 }}
             >
@@ -2911,9 +5371,9 @@ Comment: ${distributeTags?.comment || ''}
               <Music size={14} />
               <span>Now Playing</span>
             </div>
-            <button 
-              className="ytm-extra-btn" 
-              onClick={() => setIsPlayerExpanded(false)} 
+            <button
+              className="ytm-extra-btn"
+              onClick={() => setIsPlayerExpanded(false)}
               title="Minimize Player"
               style={{ opacity: 0.8, background: 'rgba(255,255,255,0.05)', padding: '6px' }}
             >
@@ -2929,7 +5389,7 @@ Comment: ${distributeTags?.comment || ''}
                   <Music size={64} />
                 </div>
               </div>
-              
+
               <div className="ytm-expanded-meta">
                 <span className="ytm-expanded-title" title={activeAudioTrack.title || activeAudioTrack.originalName}>
                   {activeAudioTrack.title || activeAudioTrack.originalName}
@@ -2956,30 +5416,30 @@ Comment: ${distributeTags?.comment || ''}
 
                 {/* Core Controls */}
                 <div className="ytm-controls" style={{ marginTop: '8px' }}>
-                  <button 
-                    className={`ytm-extra-btn ${isShuffled ? 'active' : ''}`} 
-                    onClick={() => setIsShuffled(!isShuffled)} 
+                  <button
+                    className={`ytm-extra-btn ${isShuffled ? 'active' : ''}`}
+                    onClick={() => setIsShuffled(!isShuffled)}
                     title="Shuffle"
                     style={{ marginRight: '16px' }}
                   >
                     <Shuffle size={18} />
                   </button>
-                  
+
                   <button className="ytm-control-btn" onClick={playPrev} title="Previous Track" style={{ padding: '10px' }}>
                     <SkipBack size={20} fill="currentColor" />
                   </button>
-                  
+
                   <button className="ytm-control-btn play-pause" onClick={togglePlay} title={isPlaying ? "Pause" : "Play"} style={{ width: '48px', height: '48px' }}>
                     {isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" style={{ marginLeft: '4px' }} />}
                   </button>
-                  
+
                   <button className="ytm-control-btn" onClick={playNext} title="Next Track" style={{ padding: '10px' }}>
                     <SkipForward size={20} fill="currentColor" />
                   </button>
-                  
-                  <button 
-                    className={`ytm-extra-btn ${isLooping ? 'active' : ''}`} 
-                    onClick={() => setIsLooping(!isLooping)} 
+
+                  <button
+                    className={`ytm-extra-btn ${isLooping ? 'active' : ''}`}
+                    onClick={() => setIsLooping(!isLooping)}
                     title="Repeat"
                     style={{ marginLeft: '16px' }}
                   >
@@ -3009,14 +5469,14 @@ Comment: ${distributeTags?.comment || ''}
             {/* Right Column: Tab Switching (Up Next vs Lyrics) */}
             <div className="ytm-expanded-right">
               <div className="ytm-tabs-header">
-                <button 
-                  className={`ytm-tab-btn ${activePlayerTab === 'queue' ? 'active' : ''}`} 
+                <button
+                  className={`ytm-tab-btn ${activePlayerTab === 'queue' ? 'active' : ''}`}
                   onClick={() => setActivePlayerTab('queue')}
                 >
                   Up Next
                 </button>
-                <button 
-                  className={`ytm-tab-btn ${activePlayerTab === 'lyrics' ? 'active' : ''}`} 
+                <button
+                  className={`ytm-tab-btn ${activePlayerTab === 'lyrics' ? 'active' : ''}`}
                   onClick={() => setActivePlayerTab('lyrics')}
                 >
                   Lyrics
@@ -3029,8 +5489,8 @@ Comment: ${distributeTags?.comment || ''}
                     {audioQueue.map((track, idx) => {
                       const isActive = track.id === activeAudioTrack.id;
                       return (
-                        <div 
-                          key={track.id} 
+                        <div
+                          key={track.id}
                           className={`ytm-queue-item ${isActive ? 'active' : ''}`}
                           onClick={() => playTrack(track)}
                         >

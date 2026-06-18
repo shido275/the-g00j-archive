@@ -15,7 +15,7 @@ if (!fs.existsSync(dbDir)) {
 
 // Ensure database file exists
 if (!fs.existsSync(DB_PATH)) {
-  fs.writeFileSync(DB_PATH, JSON.stringify({ files: [], folders: [], scraperJobs: [] }, null, 2), 'utf8');
+  fs.writeFileSync(DB_PATH, JSON.stringify({ files: [], folders: [], scraperJobs: [], users: [] }, null, 2), 'utf8');
 }
 
 // Thread-safe-ish atomic write
@@ -23,6 +23,9 @@ function writeDb(data) {
   const tempPath = `${DB_PATH}.tmp`;
   fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
   fs.renameSync(tempPath, DB_PATH);
+  if (global.triggerDbSync) {
+    global.triggerDbSync();
+  }
 }
 
 function readDb() {
@@ -32,10 +35,11 @@ function readDb() {
     if (!parsed.files) parsed.files = [];
     if (!parsed.folders) parsed.folders = [];
     if (!parsed.scraperJobs) parsed.scraperJobs = [];
+    if (!parsed.users) parsed.users = [];
     return parsed;
   } catch (error) {
     console.error('Error reading database, resetting to default:', error);
-    const defaultData = { files: [], folders: [], scraperJobs: [] };
+    const defaultData = { files: [], folders: [], scraperJobs: [], users: [] };
     writeDb(defaultData);
     return defaultData;
   }
@@ -187,5 +191,47 @@ export const db = {
       totalSize,
       categoryStats
     };
+  },
+
+  getUsers() {
+    const data = readDb();
+    return data.users || [];
+  },
+
+  getUser(id) {
+    const data = readDb();
+    return data.users.find(u => u.id === id) || null;
+  },
+
+  getUserByUsername(username) {
+    const data = readDb();
+    if (!data.users) return null;
+    const lowerUsername = username.toLowerCase();
+    return data.users.find(u => u.username.toLowerCase() === lowerUsername) || null;
+  },
+
+  saveUser(user) {
+    const data = readDb();
+    if (!data.users) data.users = [];
+    const index = data.users.findIndex(u => u.id === user.id);
+    if (index >= 0) {
+      data.users[index] = { ...data.users[index], ...user };
+    } else {
+      data.users.push(user);
+    }
+    writeDb(data);
+    return user;
+  },
+
+  deleteUser(id) {
+    const data = readDb();
+    if (!data.users) return null;
+    const index = data.users.findIndex(u => u.id === id);
+    if (index >= 0) {
+      const deletedUser = data.users.splice(index, 1)[0];
+      writeDb(data);
+      return deletedUser;
+    }
+    return null;
   }
 };

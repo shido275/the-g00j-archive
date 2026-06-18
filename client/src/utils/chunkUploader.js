@@ -23,6 +23,7 @@ export class ChunkUploader {
     this.startTime = null;
     this.bytesUploadedOffset = 0;
     this.folderId = options.folderId || null;
+    this.token = options.token || null;
   }
 
   setStatus(newStatus) {
@@ -42,9 +43,13 @@ export class ChunkUploader {
       const savedUploadId = localStorage.getItem(storageKey);
 
       // Initialize session
+      const headers = { 'Content-Type': 'application/json' };
+      if (this.token) {
+        headers['Authorization'] = `Bearer ${this.token}`;
+      }
       const initResponse = await fetch(`${API_BASE}/api/upload/init`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           fileName: this.file.name,
           fileSize: this.file.size,
@@ -119,8 +124,13 @@ export class ChunkUploader {
     formData.append('uploadId', this.uploadId);
     formData.append('chunkIndex', index);
 
+    const headers = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
     const response = await fetch(`${API_BASE}/api/upload/chunk`, {
       method: 'POST',
+      headers,
       body: formData
     });
 
@@ -167,9 +177,13 @@ export class ChunkUploader {
   }
 
   async finalizeUpload() {
+    const headers = { 'Content-Type': 'application/json' };
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
     const response = await fetch(`${API_BASE}/api/upload/complete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         uploadId: this.uploadId,
         fileName: this.file.name,

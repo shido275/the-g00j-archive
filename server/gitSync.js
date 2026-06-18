@@ -19,8 +19,7 @@ let gitProcessing = false;
 const activeCleanups = new Map();
 
 // Resolve folder hierarchy to create directory path in git clone
-export function getFolderHierarchyPath(folderId) {
-  if (!folderId) return '';
+export function getFolderHierarchyPath(folderId, ownerUsername) {
   const folders = db.getFolders();
   const pathParts = [];
   let currentId = folderId;
@@ -31,6 +30,27 @@ export function getFolderHierarchyPath(folderId) {
     pathParts.unshift(safeName);
     currentId = folder.parentId;
   }
+
+  let finalOwner = ownerUsername;
+  if (!finalOwner && folderId) {
+    let currentId = folderId;
+    while (currentId) {
+      const folder = folders.find(f => f.id === currentId);
+      if (!folder) break;
+      if (folder.ownerUsername) {
+        finalOwner = folder.ownerUsername;
+        break;
+      }
+      currentId = folder.parentId;
+    }
+  }
+
+  if (finalOwner) {
+    pathParts.unshift(finalOwner);
+  } else {
+    pathParts.unshift('shared');
+  }
+
   return pathParts.join('/');
 }
 
@@ -75,15 +95,34 @@ export const gitSync = {
         fs.mkdirSync(GIT_REPO_DIR, { recursive: true });
       }
 
+      let cloneUrl = 'https://github.com/shido275/The-g00j-Files.git';
+      if (process.env.GITHUB_TOKEN) {
+        cloneUrl = `https://${process.env.GITHUB_TOKEN}@github.com/shido275/The-g00j-Files.git`;
+      }
+
       if (!fs.existsSync(path.join(GIT_REPO_DIR, '.git'))) {
         console.log('[Git Sync] Cloning private repository into storage sync folder...');
-        await execPromise('git clone https://github.com/shido275/The-g00j-Files.git .', { cwd: GIT_REPO_DIR });
+        await execPromise(`git clone ${cloneUrl} .`, { cwd: GIT_REPO_DIR });
         console.log('[Git Sync] Repository cloned successfully.');
       } else {
         console.log('[Git Sync] Initializing pull/rebase to ensure in sync...');
         await runGitCmd('git pull --rebase origin main').catch(() => {
           console.log('[Git Sync] Local repository is empty or origin/main not found, skipping initial pull.');
         });
+      }
+
+      // Configure default local git user identity for commits
+      await runGitCmd('git config user.name "G00J Archives Server"');
+      await runGitCmd('git config user.email "server@g00j-archives.local"');
+
+      // Database Restoration on Startup
+      const repoDbPath = path.join(GIT_REPO_DIR, 'db.json');
+      const localDbPath = path.join(DATA_DIR, 'db.json');
+      if (fs.existsSync(repoDbPath)) {
+        console.log('[Git Sync] Restoring database state from remote GitHub repository...');
+        fs.copyFileSync(repoDbPath, localDbPath);
+      } else {
+        console.log('[Git Sync] No remote database found, starting with local instance.');
       }
     } catch (err) {
       console.error('[Git Sync] Error in initGitRepo:', err);
@@ -109,7 +148,7 @@ export const gitSync = {
         console.log(`[Git Sync] Successfully synced upload to GitHub: ${file.originalName}`);
 
         // Tell git to skip worktree tracking for this file and physically remove it
-        const folderPath = getFolderHierarchyPath(file.folderId);
+        const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
         const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
         await runGitCmd(`git update-index --skip-worktree "${relativePath}"`);
         const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
@@ -124,7 +163,7 @@ export const gitSync = {
   },
 
   queueDelete(file) {
-    const folderPath = getFolderHierarchyPath(file.folderId);
+    const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
     const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
     enqueueGitTask(async () => {
       console.log(`[Git Sync] Syncing deletion from GitHub: ${file.originalName}`);
@@ -168,7 +207,7 @@ export const gitSync = {
       activeCleanups.delete(file.id);
     }
 
-    const folderPath = getFolderHierarchyPath(file.folderId);
+    const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
     const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
     if (fs.existsSync(destFilePath)) {
       return destFilePath;
@@ -189,14 +228,14 @@ export const gitSync = {
       // Fallback if git show fails
       try {
         await runGitCmd(`git update-index --no-skip-worktree "${relativePath}"`);
-      } catch (e) {}
+      } catch (e) { }
       await runGitCmd(`git checkout HEAD -- "${relativePath}"`);
     }
     return destFilePath;
   },
 
   scheduleFileCleanup(file) {
-    const folderPath = getFolderHierarchyPath(file.folderId);
+    const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
     const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
 
     // Clear any existing timer to debounce
@@ -220,5 +259,32 @@ export const gitSync = {
     }, 1000); // 1 second debounce delay
 
     activeCleanups.set(file.id, timeoutId);
+  },
+
+  queueDbSync() {
+    enqueueGitTask(async () => {
+      console.log('[Git Sync] Syncing database to GitHub...');
+      const srcPath = path.join(DATA_DIR, 'db.json');
+      const destPath = path.join(GIT_REPO_DIR, 'db.json');
+      
+      if (fs.existsSync(srcPath)) {
+        fs.copyFileSync(srcPath, destPath);
+      }
+
+      try {
+        await runGitCmd('git pull --rebase origin main').catch(() => {});
+        
+        if (fs.existsSync(srcPath)) {
+          fs.copyFileSync(srcPath, destPath);
+        }
+
+        await runGitCmd('git add db.json');
+        await runGitCmd('git commit -m "Sync database state"');
+        await runGitCmd('git push origin main');
+        console.log('[Git Sync] Database state successfully synced to GitHub.');
+      } catch (err) {
+        console.error('[Git Sync] Failed to sync database to GitHub:', err);
+      }
+    });
   }
 };
