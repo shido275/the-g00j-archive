@@ -1885,6 +1885,18 @@ app.post('/api/files/:id/edit', async (req, res) => {
   }
 });
 
+// Serve static client assets in production if they are built
+const clientDistPath = path.join(__dirname, '../client/dist');
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) {
+      return next();
+    }
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
+
 const server = app.listen(PORT, async () => {
   console.log(`Backend server running on port ${PORT}`);
   await gitSync.initGitRepo();
