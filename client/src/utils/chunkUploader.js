@@ -1,6 +1,6 @@
 const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
   ? '' 
-  : (import.meta.env.VITE_API_URL || 'https://the-g00j-archive.onrender.com');
+  : 'http://localhost:5000';
 
 export class ChunkUploader {
   constructor(file, options = {}) {
@@ -24,6 +24,7 @@ export class ChunkUploader {
     this.bytesUploadedOffset = 0;
     this.folderId = options.folderId || null;
     this.token = options.token || null;
+    this.vault = options.vault || false;
   }
 
   setStatus(newStatus) {
@@ -189,7 +190,8 @@ export class ChunkUploader {
         fileName: this.file.name,
         fileType: this.file.type,
         totalChunks: this.totalChunks,
-        folderId: this.folderId
+        folderId: this.folderId,
+        vault: this.vault
       })
     });
 

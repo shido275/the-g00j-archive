@@ -130,8 +130,10 @@ export const gitSync = {
   },
 
   queueUpload(file) {
+    const fileNameOnDisk = file.isVault ? `${file.id}.enc` : file.originalName;
+    const commitMsg = file.isVault ? "Upload secure file" : `Upload ${file.originalName}`;
     enqueueGitTask(async () => {
-      console.log(`[Git Sync] Syncing upload to GitHub: ${file.originalName}`);
+      console.log(`[Git Sync] Syncing upload to GitHub: ${file.isVault ? 'secure file' : file.originalName}`);
 
       // 1. Pull latest to avoid push conflicts
       try {
@@ -143,31 +145,33 @@ export const gitSync = {
       // 2. Stage, commit and push
       try {
         await runGitCmd('git add -A');
-        await runGitCmd(`git commit -m "Upload ${file.originalName}"`);
+        await runGitCmd(`git commit -m "${commitMsg}"`);
         await runGitCmd('git push origin main');
-        console.log(`[Git Sync] Successfully synced upload to GitHub: ${file.originalName}`);
+        console.log(`[Git Sync] Successfully synced upload to GitHub: ${file.isVault ? 'secure file' : file.originalName}`);
 
         // Tell git to skip worktree tracking for this file and physically remove it
         const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
-        const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
+        const relativePath = path.join(folderPath, fileNameOnDisk).replace(/\\/g, '/');
         await runGitCmd(`git update-index --skip-worktree "${relativePath}"`);
-        const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
+        const destFilePath = path.join(GIT_REPO_DIR, folderPath, fileNameOnDisk);
         if (fs.existsSync(destFilePath)) {
           fs.unlinkSync(destFilePath);
-          console.log(`[Git Sync] Physically cleaned up local file after successful sync: ${file.originalName}`);
+          console.log(`[Git Sync] Physically cleaned up local file after successful sync: ${file.isVault ? 'secure file' : file.originalName}`);
         }
       } catch (err) {
-        console.error(`[Git Sync] Failed to commit/push upload: ${file.originalName}`, err);
+        console.error(`[Git Sync] Failed to commit/push upload: ${file.isVault ? 'secure file' : file.originalName}`, err);
       }
     });
   },
 
   queueDelete(file) {
     const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
-    const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
+    const fileNameOnDisk = file.isVault ? `${file.id}.enc` : file.originalName;
+    const relativePath = path.join(folderPath, fileNameOnDisk).replace(/\\/g, '/');
+    const commitMsg = file.isVault ? "Delete secure file" : `Delete ${file.originalName}`;
     enqueueGitTask(async () => {
-      console.log(`[Git Sync] Syncing deletion from GitHub: ${file.originalName}`);
-      const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
+      console.log(`[Git Sync] Syncing deletion from GitHub: ${file.isVault ? 'secure file' : file.originalName}`);
+      const destFilePath = path.join(GIT_REPO_DIR, folderPath, fileNameOnDisk);
 
       // 1. Pull latest to avoid push conflicts
       try {
@@ -191,11 +195,11 @@ export const gitSync = {
       // 4. Stage, commit and push
       try {
         await runGitCmd('git add -A');
-        await runGitCmd(`git commit -m "Delete ${file.originalName}"`);
+        await runGitCmd(`git commit -m "${commitMsg}"`);
         await runGitCmd('git push origin main');
-        console.log(`[Git Sync] Successfully synced deletion from GitHub: ${file.originalName}`);
+        console.log(`[Git Sync] Successfully synced deletion from GitHub: ${file.isVault ? 'secure file' : file.originalName}`);
       } catch (err) {
-        console.error(`[Git Sync] Failed to commit/push deletion: ${file.originalName}`, err);
+        console.error(`[Git Sync] Failed to commit/push deletion: ${file.isVault ? 'secure file' : file.originalName}`, err);
       }
     });
   },
@@ -208,13 +212,14 @@ export const gitSync = {
     }
 
     const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
-    const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
+    const fileNameOnDisk = file.isVault ? `${file.id}.enc` : file.originalName;
+    const destFilePath = path.join(GIT_REPO_DIR, folderPath, fileNameOnDisk);
     if (fs.existsSync(destFilePath)) {
       return destFilePath;
     }
 
-    console.log(`[Git Sync] Checking out file on demand: ${file.originalName}`);
-    const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
+    console.log(`[Git Sync] Checking out file on demand: ${file.isVault ? 'secure file' : file.originalName}`);
+    const relativePath = path.join(folderPath, fileNameOnDisk).replace(/\\/g, '/');
 
     const destDir = path.dirname(destFilePath);
     if (!fs.existsSync(destDir)) {
@@ -236,7 +241,8 @@ export const gitSync = {
 
   scheduleFileCleanup(file) {
     const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
-    const destFilePath = path.join(GIT_REPO_DIR, folderPath, file.originalName);
+    const fileNameOnDisk = file.isVault ? `${file.id}.enc` : file.originalName;
+    const destFilePath = path.join(GIT_REPO_DIR, folderPath, fileNameOnDisk);
 
     // Clear any existing timer to debounce
     if (activeCleanups.has(file.id)) {
@@ -248,13 +254,13 @@ export const gitSync = {
       activeCleanups.delete(file.id);
       try {
         if (fs.existsSync(destFilePath)) {
-          const relativePath = path.join(folderPath, file.originalName).replace(/\\/g, '/');
+          const relativePath = path.join(folderPath, fileNameOnDisk).replace(/\\/g, '/');
           await runGitCmd(`git update-index --skip-worktree "${relativePath}"`);
           fs.unlinkSync(destFilePath);
-          console.log(`[Git Sync] Cleaned up local file from disk (scheduled): ${file.originalName}`);
+          console.log(`[Git Sync] Cleaned up local file from disk (scheduled): ${file.isVault ? 'secure file' : file.originalName}`);
         }
       } catch (err) {
-        console.error(`[Git Sync] Failed to clean up file ${file.originalName}:`, err.message);
+        console.error(`[Git Sync] Failed to clean up file ${file.isVault ? 'secure file' : file.originalName}:`, err.message);
       }
     }, 1000); // 1 second debounce delay
 

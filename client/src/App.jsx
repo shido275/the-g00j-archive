@@ -19,6 +19,8 @@ import {
   Eye,
   Download,
   RefreshCw,
+  Lock,
+  Unlock,
   AlertCircle,
   FolderOpen,
   Info,
@@ -52,7 +54,9 @@ import { ChunkUploader } from './utils/chunkUploader';
 
 const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   ? ''
-  : (import.meta.env.VITE_API_URL || 'https://the-g00j-archive.onrender.com');
+  : 'http://localhost:5000';
+
+const originalFetch = window.fetch;
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
@@ -60,10 +64,20 @@ function App() {
   const [usersList, setUsersList] = useState([]);
   const [adminViewTab, setAdminViewTab] = useState('users');
   
+  // Vault state variables
+  const [vaultPassword, setVaultPassword] = useState('');
+  const [isVaultUnlocked, setIsVaultUnlocked] = useState(false);
+  const [isVaultInitialized, setIsVaultInitialized] = useState(true);
+  const [vaultUnlockInput, setVaultUnlockInput] = useState('');
+  const [vaultConfirmInput, setVaultConfirmInput] = useState('');
+  const [vaultError, setVaultError] = useState('');
+  const [vaultSuccess, setVaultSuccess] = useState('');
+
   // Admin form states
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState('user');
+  const [newDisplayName, setNewDisplayName] = useState('');
   const [selectedUserIdForPasswordReset, setSelectedUserIdForPasswordReset] = useState('');
   const [resetPasswordValue, setResetPasswordValue] = useState('');
   const [adminError, setAdminError] = useState('');
@@ -73,13 +87,37 @@ function App() {
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
 
-  // Local fetch override to inject Authorization Bearer token automatically
-  const originalFetch = window.fetch;
-  const fetch = async (url, options = {}) => {
+  // g00j Key state variables
+  const [loginMode, setLoginMode] = useState('login'); // 'login', 'signup', 'reset'
+  const [signupUsername, setSignupUsername] = useState('');
+  const [signupDisplayName, setSignupDisplayName] = useState('');
+  const [signupPassword, setSignupPassword] = useState('');
+  const [signupG00jKey, setSignupG00jKey] = useState('');
+  const [signupRole, setSignupRole] = useState('user');
+
+  const [resetUsername, setResetUsername] = useState('');
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetG00jKey, setResetG00jKey] = useState('');
+
+  const [g00jKeysList, setG00jKeysList] = useState([]);
+  const [newG00jKeyDesc, setNewG00jKeyDesc] = useState('');
+
+  // Vault key rotation state variables
+  const [showChangeVaultPasswordModal, setShowChangeVaultPasswordModal] = useState(false);
+  const [newVaultPasswordInput, setNewVaultPasswordInput] = useState('');
+  const [confirmNewVaultPasswordInput, setConfirmNewVaultPasswordInput] = useState('');
+  const [vaultRotationError, setVaultRotationError] = useState('');
+  const [vaultRotationSuccess, setVaultRotationSuccess] = useState('');
+
+  // Override window.fetch to inject Authorization Bearer token automatically
+  window.fetch = async (url, options = {}) => {
     const isApi = url.toString().startsWith(API_BASE) || url.toString().startsWith('/api');
     if (isApi && token) {
       const headers = options.headers ? { ...options.headers } : {};
       headers['Authorization'] = `Bearer ${token}`;
+      if (vaultPassword) {
+        headers['X-Vault-Key'] = vaultPassword;
+      }
       options = { ...options, headers };
     }
     const response = await originalFetch(url, options);
@@ -87,8 +125,26 @@ function App() {
       localStorage.removeItem('token');
       setToken('');
       setCurrentUser(null);
+      setVaultPassword('');
+      setIsVaultUnlocked(false);
     }
     return response;
+  };
+
+  const getFileDownloadUrl = (file, isDownload = false) => {
+    if (!file) return '';
+    let url = `${API_BASE}/api/files/download/${file.id}`;
+    const params = [];
+    if (isDownload) {
+      params.push('download=true');
+    }
+    if (file.isVault && vaultPassword) {
+      params.push(`vaultKey=${encodeURIComponent(vaultPassword)}`);
+    }
+    if (params.length > 0) {
+      url += '?' + params.join('&');
+    }
+    return url;
   };
 
   const [activeCategory, setActiveCategory] = useState('all');
@@ -267,7 +323,7 @@ function App() {
 
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      img.src = `${API_BASE}/api/files/download/${editorFile.id}?t=${Date.now()}`;
+      img.src = getFileDownloadUrl(editorFile) + (getFileDownloadUrl(editorFile).includes('?') ? '&' : '?') + 't=' + Date.now();
       img.onload = () => {
         setImageObj(img);
         setCanvasWidth(img.width);
@@ -1418,11 +1474,168 @@ function App() {
     }
   };
 
+  const fetchG00JKeys = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/g00j-keys`);
+      if (res.ok) {
+        const data = await res.json();
+        setG00jKeysList(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch g00j keys:', err);
+    }
+  };
+
+  const handleCreateG00JKey = async (e) => {
+    e.preventDefault();
+    setAdminError('');
+    setAdminSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/g00j-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: newG00jKeyDesc })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAdminSuccess('Key generated: ' + data.key.key);
+        setNewG00jKeyDesc('');
+        fetchG00JKeys();
+      } else {
+        setAdminError(data.error || 'Failed to create key');
+      }
+    } catch (err) {
+      setAdminError('Failed to connect to key service');
+    }
+  };
+
+  const handleDeleteG00JKey = async (keyString) => {
+    if (!confirm('Are you sure you want to revoke key ' + keyString + '?')) return;
+    setAdminError('');
+    setAdminSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/g00j-keys/${keyString}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAdminSuccess('Key revoked successfully');
+        fetchG00JKeys();
+      } else {
+        setAdminError(data.error || 'Failed to revoke key');
+      }
+    } catch (err) {
+      setAdminError('Failed to connect to key service');
+    }
+  };
+
+  const handleSignup = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: signupUsername,
+          password: signupPassword,
+          displayName: signupDisplayName,
+          g00jKey: signupG00jKey,
+          role: signupRole
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert('Signup successful! Please sign in.');
+        setLoginMode('login');
+        setSignupUsername('');
+        setSignupDisplayName('');
+        setSignupPassword('');
+        setSignupG00jKey('');
+      } else {
+        setLoginError(data.error || 'Signup failed');
+      }
+    } catch (err) {
+      setLoginError('Could not connect to authentication server');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleResetPasswordWithG00jKey = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: resetUsername,
+          newPassword: resetPassword,
+          g00jKey: resetG00jKey
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert('Password reset successful! Please sign in.');
+        setLoginMode('login');
+        setResetUsername('');
+        setResetPassword('');
+        setResetG00jKey('');
+      } else {
+        setLoginError(data.error || 'Password reset failed');
+      }
+    } catch (err) {
+      setLoginError('Could not connect to authentication server');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleChangeVaultPassword = async (e) => {
+    e.preventDefault();
+    setVaultRotationError('');
+    setVaultRotationSuccess('');
+    if (newVaultPasswordInput !== confirmNewVaultPasswordInput) {
+      setVaultRotationError('New passwords do not match');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/vault/change-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          oldPassword: vaultPassword,
+          newPassword: newVaultPasswordInput
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setVaultRotationSuccess('Vault password changed and files re-encrypted!');
+        setVaultPassword(newVaultPasswordInput);
+        setNewVaultPasswordInput('');
+        setConfirmNewVaultPasswordInput('');
+        setTimeout(() => {
+          setShowChangeVaultPasswordModal(false);
+          setVaultRotationSuccess('');
+        }, 2000);
+      } else {
+        setVaultRotationError(data.error || 'Failed to change password');
+      }
+    } catch (err) {
+      setVaultRotationError('Error communicating with vault rotation service');
+    }
+  };
+
   useEffect(() => {
     if (activeCategory === 'admin' && currentUser?.role === 'admin') {
       fetchUsers();
+      fetchG00JKeys();
     }
-  }, [activeCategory]);
+  }, [activeCategory, currentUser]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -1460,6 +1673,8 @@ function App() {
       setToken('');
       setCurrentUser(null);
       setActiveCategory('all');
+      setVaultPassword('');
+      setIsVaultUnlocked(false);
     }
   };
 
@@ -1471,7 +1686,7 @@ function App() {
       const res = await fetch(`${API_BASE}/api/admin/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole })
+        body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole, displayName: newDisplayName })
       });
       const data = await res.json();
       if (res.ok) {
@@ -1479,6 +1694,7 @@ function App() {
         setNewUsername('');
         setNewPassword('');
         setNewRole('user');
+        setNewDisplayName('');
         fetchUsers();
       } else {
         setAdminError(data.error || 'Failed to create user');
@@ -1660,7 +1876,7 @@ function App() {
             'application/javascript', 'application/json', 'application/x-javascript'
           ];
           if (data.mimeType.startsWith('text/') || textMimes.includes(data.mimeType)) {
-            fetch(`${API_BASE}/api/files/download/${data.id}`)
+            fetch(getFileDownloadUrl(data))
               .then(res => {
                 if (!res.ok) throw new Error('Could not download content');
                 return res.text();
@@ -1723,7 +1939,7 @@ function App() {
     setCurrentTime(0);
 
     if (audioRef.current) {
-      audioRef.current.src = `${API_BASE}/api/files/download/${track.id}`;
+      audioRef.current.src = getFileDownloadUrl(track);
       audioRef.current.load();
       audioRef.current.play().catch(err => console.log('Autoplay blocked:', err));
     }
@@ -1765,7 +1981,7 @@ function App() {
     if (nextTrack) {
       setActiveAudioTrack(nextTrack);
       if (audioRef.current) {
-        audioRef.current.src = `${API_BASE}/api/files/download/${nextTrack.id}`;
+        audioRef.current.src = getFileDownloadUrl(nextTrack);
         audioRef.current.load();
         audioRef.current.play().catch(err => console.log(err));
         setIsPlaying(true);
@@ -1783,7 +1999,7 @@ function App() {
     if (prevTrack) {
       setActiveAudioTrack(prevTrack);
       if (audioRef.current) {
-        audioRef.current.src = `${API_BASE}/api/files/download/${prevTrack.id}`;
+        audioRef.current.src = getFileDownloadUrl(prevTrack);
         audioRef.current.load();
         audioRef.current.play().catch(err => console.log(err));
         setIsPlaying(true);
@@ -1846,9 +2062,13 @@ function App() {
     setLoading(true);
     try {
       const url = new URL(API_BASE + '/api/files', window.location.origin);
-      if (activeCategory !== 'all') {
+      if (activeCategory === 'vault') {
+        url.searchParams.append('vault', 'true');
+      } else if (activeCategory !== 'all') {
         url.searchParams.append('category', activeCategory);
-      } else {
+      }
+      
+      if (activeCategory === 'all' || activeCategory === 'vault') {
         if (!searchQuery) {
           url.searchParams.append('folderId', currentFolderId || 'root');
         }
@@ -1875,6 +2095,9 @@ function App() {
   const fetchFolders = async () => {
     try {
       const url = new URL(API_BASE + '/api/folders', window.location.origin);
+      if (activeCategory === 'vault') {
+        url.searchParams.append('vault', 'true');
+      }
       if (currentFolderId) {
         url.searchParams.append('parentId', currentFolderId);
       } else {
@@ -1892,6 +2115,9 @@ function App() {
       // Fetch all folders to compute breadcrumbs trail
       const allUrl = new URL(API_BASE + '/api/folders', window.location.origin);
       allUrl.searchParams.append('all', 'true');
+      if (activeCategory === 'vault') {
+        allUrl.searchParams.append('vault', 'true');
+      }
       const allResponse = await fetch(allUrl.toString());
       if (allResponse.ok) {
         const allData = await allResponse.json();
@@ -1904,7 +2130,7 @@ function App() {
 
   useEffect(() => {
     fetchFiles();
-    if (activeCategory === 'all' && !searchQuery) {
+    if ((activeCategory === 'all' || activeCategory === 'vault') && !searchQuery) {
       fetchFolders();
     } else {
       setFolders([]);
@@ -1927,7 +2153,7 @@ function App() {
 
     if (isText) {
       setTextContent('Loading content...');
-      fetch(`${API_BASE}/api/files/download/${previewFile.id}`)
+      fetch(getFileDownloadUrl(previewFile))
         .then(res => {
           if (!res.ok) throw new Error('Could not download file content');
           return res.text();
@@ -2007,6 +2233,7 @@ function App() {
       const uploader = new ChunkUploader(file, {
         token: token,
         folderId: currentFolderId,
+        vault: activeCategory === 'vault',
         onProgress: (pInfo) => {
           setUploads(prev => prev.map(u =>
             u.id === uploadKey
@@ -2047,6 +2274,100 @@ function App() {
     }
   };
 
+  useEffect(() => {
+    setCurrentFolderId(null);
+  }, [activeCategory]);
+
+  useEffect(() => {
+    if (activeCategory === 'vault' && token) {
+      const checkVaultInit = async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/vault/unlock`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: 'test-check-init' })
+          });
+          const data = await res.json();
+          if (data.initialized === false) {
+            setIsVaultInitialized(false);
+          } else {
+            setIsVaultInitialized(true);
+          }
+        } catch (e) {}
+      };
+      checkVaultInit();
+    }
+  }, [activeCategory, token]);
+
+  const handleVaultUnlock = async (e) => {
+    if (e) e.preventDefault();
+    if (!vaultUnlockInput) return;
+    setVaultError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/vault/unlock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: vaultUnlockInput })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (data.initialized === false) {
+          setIsVaultInitialized(false);
+        } else {
+          setVaultPassword(vaultUnlockInput);
+          setIsVaultUnlocked(true);
+          setVaultUnlockInput('');
+        }
+      } else {
+        setVaultError(data.error || 'Failed to unlock vault');
+      }
+    } catch (err) {
+      setVaultError('Failed to connect to vault service');
+    }
+  };
+
+  const handleVaultInitialize = async (e) => {
+    if (e) e.preventDefault();
+    if (!vaultUnlockInput || !vaultConfirmInput) {
+      setVaultError('Please fill in all fields');
+      return;
+    }
+    if (vaultUnlockInput !== vaultConfirmInput) {
+      setVaultError('Passwords do not match');
+      return;
+    }
+    setVaultError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/vault/initialize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: vaultUnlockInput })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setVaultPassword(vaultUnlockInput);
+        setIsVaultUnlocked(true);
+        setIsVaultInitialized(true);
+        setVaultUnlockInput('');
+        setVaultConfirmInput('');
+        setVaultSuccess('Vault successfully initialized!');
+        setTimeout(() => setVaultSuccess(''), 3000);
+      } else {
+        setVaultError(data.error || 'Failed to initialize vault');
+      }
+    } catch (err) {
+      setVaultError('Failed to connect to vault service');
+    }
+  };
+
+  const handleVaultLock = () => {
+    setVaultPassword('');
+    setIsVaultUnlocked(false);
+    setVaultUnlockInput('');
+    setVaultConfirmInput('');
+    setVaultError('');
+  };
+
   const handleCreateFolder = async () => {
     const folderName = window.prompt('Enter folder name:');
     if (!folderName || !folderName.trim()) return;
@@ -2057,7 +2378,8 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: folderName.trim(),
-          parentId: currentFolderId || 'root'
+          parentId: currentFolderId || 'root',
+          vault: activeCategory === 'vault'
         })
       });
 
@@ -2140,7 +2462,8 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: link.url,
-          folderId: targetFolderId === 'root' ? null : targetFolderId
+          folderId: targetFolderId === 'root' ? null : targetFolderId,
+          vault: activeCategory === 'vault'
         })
       });
       const data = await response.json();
@@ -2254,7 +2577,7 @@ function App() {
   const handleDownload = (e, file) => {
     e.stopPropagation();
     const link = document.createElement('a');
-    link.href = `${API_BASE}/api/files/download/${file.id}?download=true`;
+    link.href = getFileDownloadUrl(file, true);
     link.download = file.originalName;
     document.body.appendChild(link);
     link.click();
@@ -2345,14 +2668,14 @@ function App() {
             <div className="shared-preview-box">
               {sharedFile.category === 'images' && (
                 <img
-                  src={`${API_BASE}/api/files/download/${sharedFile.id}`}
+                  src={getFileDownloadUrl(sharedFile)}
                   alt={sharedFile.originalName}
                 />
               )}
 
               {sharedFile.category === 'videos' && (
                 <video
-                  src={`${API_BASE}/api/files/download/${sharedFile.id}`}
+                  src={getFileDownloadUrl(sharedFile)}
                   controls
                   autoPlay
                 />
@@ -2364,7 +2687,7 @@ function App() {
                     <Music size={32} />
                   </div>
                   <audio
-                    src={`${API_BASE}/api/files/download/${sharedFile.id}`}
+                    src={getFileDownloadUrl(sharedFile)}
                     controls
                     autoPlay
                     style={{ width: '100%' }}
@@ -2464,39 +2787,168 @@ function App() {
             <h1 className="login-title">G00J Archives</h1>
             <p className="login-subtitle">Premium Cloud Storage & Music Studio</p>
           </div>
-          <form className="login-form" onSubmit={handleLogin}>
-            {loginError && (
-              <div className="login-error-alert">
-                <AlertCircle size={16} />
-                <span>{loginError}</span>
+
+          {loginMode === 'login' && (
+            <form className="login-form" onSubmit={handleLogin}>
+              {loginError && (
+                <div className="login-error-alert">
+                  <AlertCircle size={16} />
+                  <span>{loginError}</span>
+                </div>
+              )}
+              <div className="login-input-group">
+                <label className="login-input-label">Username</label>
+                <input
+                  type="text"
+                  className="login-input search-input"
+                  placeholder="Enter username"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  required
+                />
               </div>
-            )}
-            <div className="login-input-group">
-              <label className="login-input-label">Username</label>
-              <input
-                type="text"
-                className="login-input search-input"
-                placeholder="Enter username"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                required
-              />
-            </div>
-            <div className="login-input-group">
-              <label className="login-input-label">Password</label>
-              <input
-                type="password"
-                className="login-input search-input"
-                placeholder="Enter password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                required
-              />
-            </div>
-            <button type="submit" className="login-submit-btn glow-btn" disabled={loginLoading}>
-              {loginLoading ? 'Signing In...' : 'Sign In'}
-            </button>
-          </form>
+              <div className="login-input-group">
+                <label className="login-input-label">Password</label>
+                <input
+                  type="password"
+                  className="login-input search-input"
+                  placeholder="Enter password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  required
+                />
+              </div>
+              <button type="submit" className="login-submit-btn glow-btn" disabled={loginLoading}>
+                {loginLoading ? 'Signing In...' : 'Sign In'}
+              </button>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px', fontSize: '0.8rem' }}>
+                <span onClick={() => { setLoginMode('signup'); setLoginError(''); }} style={{ color: 'var(--accent-indigo)', cursor: 'pointer', fontWeight: 500 }}>Create Account</span>
+                <span onClick={() => { setLoginMode('reset'); setLoginError(''); }} style={{ color: 'var(--text-secondary)', cursor: 'pointer', fontWeight: 500 }}>Forgot Password?</span>
+              </div>
+            </form>
+          )}
+
+          {loginMode === 'signup' && (
+            <form className="login-form" onSubmit={handleSignup}>
+              {loginError && (
+                <div className="login-error-alert">
+                  <AlertCircle size={16} />
+                  <span>{loginError}</span>
+                </div>
+              )}
+              <div className="login-input-group">
+                <label className="login-input-label">Username</label>
+                <input
+                  type="text"
+                  className="login-input search-input"
+                  placeholder="Enter username"
+                  value={signupUsername}
+                  onChange={(e) => setSignupUsername(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="login-input-group">
+                <label className="login-input-label">Display Name</label>
+                <input
+                  type="text"
+                  className="login-input search-input"
+                  placeholder="Enter display name"
+                  value={signupDisplayName}
+                  onChange={(e) => setSignupDisplayName(e.target.value)}
+                />
+              </div>
+              <div className="login-input-group">
+                <label className="login-input-label">Password</label>
+                <input
+                  type="password"
+                  className="login-input search-input"
+                  placeholder="Enter password"
+                  value={signupPassword}
+                  onChange={(e) => setSignupPassword(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="login-input-group">
+                <label className="login-input-label">Role</label>
+                <select
+                  className="editor-select"
+                  value={signupRole}
+                  onChange={(e) => setSignupRole(e.target.value)}
+                  style={{ width: '100%', height: '38px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg)', color: 'var(--text-primary)' }}
+                >
+                  <option value="user">Regular User</option>
+                  <option value="premium">Premium User</option>
+                </select>
+              </div>
+              <div className="login-input-group">
+                <label className="login-input-label">Invite / g00j Key</label>
+                <input
+                  type="text"
+                  className="login-input search-input"
+                  placeholder="Enter invite key (e.g. G00J-...)"
+                  value={signupG00jKey}
+                  onChange={(e) => setSignupG00jKey(e.target.value)}
+                  required
+                />
+              </div>
+              <button type="submit" className="login-submit-btn glow-btn" disabled={loginLoading}>
+                {loginLoading ? 'Registering...' : 'Register'}
+              </button>
+              <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '0.8rem' }}>
+                <span onClick={() => { setLoginMode('login'); setLoginError(''); }} style={{ color: 'var(--accent-indigo)', cursor: 'pointer', fontWeight: 500 }}>Back to Sign In</span>
+              </div>
+            </form>
+          )}
+
+          {loginMode === 'reset' && (
+            <form className="login-form" onSubmit={handleResetPasswordWithG00jKey}>
+              {loginError && (
+                <div className="login-error-alert">
+                  <AlertCircle size={16} />
+                  <span>{loginError}</span>
+                </div>
+              )}
+              <div className="login-input-group">
+                <label className="login-input-label">Username</label>
+                <input
+                  type="text"
+                  className="login-input search-input"
+                  placeholder="Enter username"
+                  value={resetUsername}
+                  onChange={(e) => setResetUsername(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="login-input-group">
+                <label className="login-input-label">New Password</label>
+                <input
+                  type="password"
+                  className="login-input search-input"
+                  placeholder="Enter new password"
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="login-input-group">
+                <label className="login-input-label">g00j Key</label>
+                <input
+                  type="text"
+                  className="login-input search-input"
+                  placeholder="Enter reset key (e.g. G00J-...)"
+                  value={resetG00jKey}
+                  onChange={(e) => setResetG00jKey(e.target.value)}
+                  required
+                />
+              </div>
+              <button type="submit" className="login-submit-btn glow-btn" disabled={loginLoading}>
+                {loginLoading ? 'Resetting...' : 'Reset Password'}
+              </button>
+              <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '0.8rem' }}>
+                <span onClick={() => { setLoginMode('login'); setLoginError(''); }} style={{ color: 'var(--accent-indigo)', cursor: 'pointer', fontWeight: 500 }}>Back to Sign In</span>
+              </div>
+            </form>
+          )}
         </div>
       </div>
     );
@@ -2581,6 +3033,14 @@ function App() {
               <span>Others</span>
               <span className="nav-badge">{getCategoryCount('others')}</span>
             </a>
+            <a
+              className={`nav-item ${activeCategory === 'vault' ? 'active' : ''}`}
+              onClick={() => setActiveCategory('vault')}
+              style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)', marginTop: '8px', paddingTop: '12px' }}
+            >
+              <Lock size={18} style={{ color: isVaultUnlocked ? 'var(--accent-indigo)' : 'inherit' }} />
+              <span>Secure Vault</span>
+            </a>
             {currentUser?.role === 'admin' && (
               <a
                 className={`nav-item ${activeCategory === 'admin' ? 'active' : ''}`}
@@ -2611,14 +3071,14 @@ function App() {
           <div className="user-profile-sidebar" style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)', padding: '16px 8px 0 8px', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <div className="avatar-placeholder" style={{ background: 'var(--accent-indigo)', color: '#fff', borderRadius: '50%', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                {currentUser?.username?.charAt(0).toUpperCase()}
+                {(currentUser?.displayName || currentUser?.username)?.charAt(0).toUpperCase()}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {currentUser?.username}
+                  {currentUser?.displayName || currentUser?.username}
                 </span>
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                  {currentUser?.role === 'admin' ? 'Administrator' : 'User'}
+                  {currentUser?.role === 'admin' ? 'Administrator' : currentUser?.role === 'premium' ? 'Premium User' : 'User'}
                 </span>
               </div>
             </div>
@@ -2712,7 +3172,83 @@ function App() {
 
         {/* Content body */}
         <section className="content-body">
-          {activeCategory === 'admin' ? (
+          {activeCategory === 'vault' && !isVaultUnlocked ? (
+            <div className="vault-container glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', minHeight: '400px' }}>
+              <div className="category-banner" style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h2 className="category-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Lock size={24} style={{ color: 'var(--accent-indigo)' }} />
+                    Secure Restricted Vault
+                  </h2>
+                  <p className="category-subtitle">Zero-knowledge AES-256 encrypted file storage</p>
+                </div>
+              </div>
+              <div style={{ maxWidth: '400px', margin: '40px auto', padding: '24px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-md)' }}>
+                {vaultError && (
+                  <div className="admin-alert-box error" style={{ marginBottom: '16px' }}>
+                    <AlertCircle size={14} />
+                    <span>{vaultError}</span>
+                  </div>
+                )}
+                {vaultSuccess && (
+                  <div className="admin-alert-box success" style={{ marginBottom: '16px' }}>
+                    <span>{vaultSuccess}</span>
+                  </div>
+                )}
+                {isVaultInitialized ? (
+                  <form onSubmit={handleVaultUnlock} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div className="login-input-group">
+                      <label className="login-input-label">Enter Vault Password</label>
+                      <input
+                        type="password"
+                        className="login-input search-input"
+                        placeholder="Password"
+                        value={vaultUnlockInput}
+                        onChange={(e) => setVaultUnlockInput(e.target.value)}
+                      />
+                    </div>
+                    <button type="submit" className="login-submit-btn glow-btn">
+                      Unlock Vault
+                    </button>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', textAlign: 'center', marginTop: '8px', lineHeight: '1.4' }}>
+                      If you have never set a vault password, enter your desired password. It will initialize the vault for you.
+                    </p>
+                  </form>
+                ) : (
+                  <form onSubmit={handleVaultInitialize} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>Setup Secure Vault</h3>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+                      Choose a strong vault password. This password will derive keys to encrypt files locally before sync. 
+                      <strong> If lost, your vault files cannot be recovered.</strong>
+                    </p>
+                    <div className="login-input-group">
+                      <label className="login-input-label">Vault Password</label>
+                      <input
+                        type="password"
+                        className="login-input search-input"
+                        placeholder="Enter password"
+                        value={vaultUnlockInput}
+                        onChange={(e) => setVaultUnlockInput(e.target.value)}
+                      />
+                    </div>
+                    <div className="login-input-group">
+                      <label className="login-input-label">Confirm Password</label>
+                      <input
+                        type="password"
+                        className="login-input search-input"
+                        placeholder="Confirm password"
+                        value={vaultConfirmInput}
+                        onChange={(e) => setVaultConfirmInput(e.target.value)}
+                      />
+                    </div>
+                    <button type="submit" className="login-submit-btn glow-btn">
+                      Initialize Vault
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          ) : activeCategory === 'admin' ? (
             <div className="admin-dashboard-container glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', minHeight: '400px' }}>
               <div className="category-banner" style={{ marginBottom: '24px', paddingBottom: '0' }}>
                 <div>
@@ -2740,6 +3276,12 @@ function App() {
                 >
                   Reset Password
                 </button>
+                <button
+                  className={`admin-tab-btn ${adminViewTab === 'g00j-keys' ? 'active' : ''}`}
+                  onClick={() => { setAdminViewTab('g00j-keys'); setAdminError(''); setAdminSuccess(''); }}
+                >
+                  Invite Keys (g00j)
+                </button>
               </div>
 
               {adminError && (
@@ -2761,6 +3303,7 @@ function App() {
                     <thead>
                       <tr>
                         <th>Username</th>
+                        <th>Display Name</th>
                         <th>Role</th>
                         <th>Created Date</th>
                         <th style={{ textAlign: 'right' }}>Actions</th>
@@ -2771,11 +3314,14 @@ function App() {
                         <tr key={u.id} className="files-list-row" style={{ cursor: 'default' }}>
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                              <div style={{ background: u.role === 'admin' ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.05)', color: u.role === 'admin' ? 'var(--accent-indigo)' : 'var(--text-secondary)', borderRadius: '50%', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                                {u.username.charAt(0).toUpperCase()}
+                              <div style={{ background: u.role === 'admin' ? 'rgba(99, 102, 241, 0.15)' : u.role === 'premium' ? 'rgba(236, 72, 153, 0.15)' : 'rgba(255, 255, 255, 0.05)', color: u.role === 'admin' ? 'var(--accent-indigo)' : u.role === 'premium' ? '#ec4899' : 'var(--text-secondary)', borderRadius: '50%', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>
+                                {(u.displayName || u.username).charAt(0).toUpperCase()}
                               </div>
                               <span style={{ fontWeight: 600 }}>{u.username}</span>
                             </div>
+                          </td>
+                          <td>
+                            <span style={{ color: 'var(--text-primary)' }}>{u.displayName || u.username}</span>
                           </td>
                           <td>
                             <span style={{
@@ -2783,8 +3329,8 @@ function App() {
                               borderRadius: '4px',
                               fontSize: '0.75rem',
                               fontWeight: 600,
-                              background: u.role === 'admin' ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-                              color: u.role === 'admin' ? 'var(--accent-indigo)' : 'var(--text-secondary)'
+                              background: u.role === 'admin' ? 'rgba(99, 102, 241, 0.15)' : u.role === 'premium' ? 'rgba(236, 72, 153, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                              color: u.role === 'admin' ? 'var(--accent-indigo)' : u.role === 'premium' ? '#ec4899' : 'var(--text-secondary)'
                             }}>
                               {u.role.toUpperCase()}
                             </span>
@@ -2841,6 +3387,17 @@ function App() {
                       />
                     </div>
                     <div className="login-input-group">
+                      <label className="login-input-label">Display Name (Optional)</label>
+                      <input
+                        type="text"
+                        className="search-input"
+                        style={{ height: '38px', paddingLeft: '12px' }}
+                        value={newDisplayName}
+                        onChange={(e) => setNewDisplayName(e.target.value)}
+                        placeholder="Enter display name"
+                      />
+                    </div>
+                    <div className="login-input-group">
                       <label className="login-input-label">Password</label>
                       <input
                         type="password"
@@ -2861,6 +3418,7 @@ function App() {
                         style={{ height: '38px', border: '1px solid var(--glass-border)' }}
                       >
                         <option value="user">Regular User</option>
+                        <option value="premium">Premium User</option>
                         <option value="admin">Administrator</option>
                       </select>
                     </div>
@@ -2907,28 +3465,125 @@ function App() {
                   </form>
                 </div>
               )}
+
+              {adminViewTab === 'g00j-keys' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                  <div className="admin-form-card glass-panel" style={{ maxWidth: '440px' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '12px' }}>Generate Invite Key</h3>
+                    <form onSubmit={handleCreateG00JKey} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div className="login-input-group">
+                        <label className="login-input-label">Key Description</label>
+                        <input
+                          type="text"
+                          className="search-input"
+                          style={{ height: '38px', paddingLeft: '12px' }}
+                          value={newG00jKeyDesc}
+                          onChange={(e) => setNewG00jKeyDesc(e.target.value)}
+                          placeholder="e.g. Invite for RoutrMann premium signup"
+                          required
+                        />
+                      </div>
+                      <button type="submit" className="glow-btn" style={{ width: '100%', height: '38px', margin: '8px 0 0 0' }}>
+                        Generate g00j Key
+                      </button>
+                    </form>
+                  </div>
+
+                  <div className="files-list-wrapper glass-panel" style={{ border: 'none', background: 'transparent', boxShadow: 'none' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '12px' }}>Active Invite Keys</h3>
+                    {g00jKeysList.length === 0 ? (
+                      <p style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: '0.9rem' }}>No generated keys. You can also use "G00J-MASTER-KEY" permanently.</p>
+                    ) : (
+                      <table className="files-list-table">
+                        <thead>
+                          <tr>
+                            <th>Key</th>
+                            <th>Description</th>
+                            <th>Created Date</th>
+                            <th style={{ textAlign: 'right' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {g00jKeysList.map(k => (
+                            <tr key={k.key} className="files-list-row" style={{ cursor: 'default' }}>
+                              <td>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <code style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '2px 6px', borderRadius: '4px', color: 'var(--accent-indigo)', fontWeight: 'bold' }}>{k.key}</code>
+                                  <button
+                                    className="file-action-btn"
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(k.key);
+                                      alert('Copied to clipboard!');
+                                    }}
+                                    title="Copy Key"
+                                  >
+                                    <Copy size={12} />
+                                  </button>
+                                </div>
+                              </td>
+                              <td style={{ color: 'var(--text-secondary)' }}>{k.description}</td>
+                              <td className="list-date-cell">{new Date(k.createdDate).toLocaleDateString()}</td>
+                              <td>
+                                <div className="list-actions-cell" style={{ justifyContent: 'flex-end' }}>
+                                  <button
+                                    className="file-action-btn btn-delete"
+                                    onClick={() => handleDeleteG00JKey(k.key)}
+                                    title="Revoke Key"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <>
-              <div className="category-banner">
+              <div className="category-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                  <h2 className="category-title">{activeCategory} Files</h2>
-              <p className="category-subtitle">
-                {(files.length + folders.length)} {(files.length + folders.length) === 1 ? 'item' : 'items'} stored in this category
-              </p>
-            </div>
-          </div>
+                  <h2 className="category-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'capitalize' }}>
+                    {activeCategory === 'vault' ? (
+                      <>
+                        <Unlock size={20} style={{ color: 'var(--accent-indigo)' }} />
+                        Secure Vault
+                      </>
+                    ) : `${activeCategory} Files`}
+                  </h2>
+                  <p className="category-subtitle">
+                    {(files.length + folders.length)} {(files.length + folders.length) === 1 ? 'item' : 'items'} stored in this category
+                  </p>
+                </div>
+                {activeCategory === 'vault' && isVaultUnlocked && (
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="glow-btn" onClick={() => setShowChangeVaultPasswordModal(true)} style={{ background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)', color: 'var(--accent-indigo)', height: '36px', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                      <Key size={14} />
+                      Change Vault Key
+                    </button>
+                    <button className="glow-btn" onClick={handleVaultLock} style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ef4444', height: '36px', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                      <Lock size={14} />
+                      Lock Vault
+                    </button>
+                  </div>
+                )}
+              </div>
 
-          {/* Breadcrumbs Navigation */}
-          {activeCategory === 'all' && !searchQuery && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-              {!sharedFolderRootId ? (
-                <span
-                  onClick={() => setCurrentFolderId(null)}
-                  style={{ cursor: 'pointer', color: currentFolderId ? 'var(--accent-indigo)' : 'inherit', fontWeight: currentFolderId ? 500 : 600 }}
-                >
-                  Root
-                </span>
+              {/* Breadcrumbs Navigation */}
+              {(activeCategory === 'all' || activeCategory === 'vault') && !searchQuery && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                  {!sharedFolderRootId ? (
+                    <span
+                      onClick={() => setCurrentFolderId(null)}
+                      style={{ cursor: 'pointer', color: currentFolderId ? 'var(--accent-indigo)' : 'inherit', fontWeight: currentFolderId ? 500 : 600 }}
+                    >
+                      Root
+                    </span>
               ) : (
                 <span
                   onClick={() => setCurrentFolderId(sharedFolderRootId)}
@@ -2994,7 +3649,7 @@ function App() {
             // Grid Layout
             <div className="files-grid">
               {/* Folder list */}
-              {activeCategory === 'all' && !searchQuery && folders.map(folder => (
+              {(activeCategory === 'all' || activeCategory === 'vault') && !searchQuery && folders.map(folder => (
                 <div
                   key={folder.id}
                   className="file-card glass-card"
@@ -3016,14 +3671,16 @@ function App() {
                   <div className="file-card-actions" style={{ marginTop: '12px', paddingTop: '12px' }}>
                     {!sharedFolderRootId ? (
                       <>
-                        <button
-                          className="file-action-btn"
-                          onClick={(e) => openShareModal(e, folder, 'folder')}
-                          title="Share Folder"
-                          style={{ color: 'var(--accent-indigo)', marginRight: '8px' }}
-                        >
-                          <Share2 size={14} />
-                        </button>
+                        {!folder.isVault && (
+                          <button
+                            className="file-action-btn"
+                            onClick={(e) => openShareModal(e, folder, 'folder')}
+                            title="Share Folder"
+                            style={{ color: 'var(--accent-indigo)', marginRight: '8px' }}
+                          >
+                            <Share2 size={14} />
+                          </button>
+                        )}
                         <button
                           className="file-action-btn btn-delete"
                           onClick={(e) => handleDeleteFolder(e, folder.id, folder.name)}
@@ -3050,7 +3707,7 @@ function App() {
                   <div className="file-card-preview">
                     {file.category === 'images' ? (
                       <img
-                        src={`${API_BASE}/api/files/download/${file.id}`}
+                        src={getFileDownloadUrl(file)}
                         alt={file.originalName}
                         className="file-card-image"
                         loading="lazy"
@@ -3114,14 +3771,16 @@ function App() {
                     </button>
                     {!sharedFolderRootId && (
                       <>
-                        <button
-                          className="file-action-btn"
-                          onClick={(e) => openShareModal(e, file)}
-                          title="Share File"
-                          style={{ color: 'var(--accent-indigo)' }}
-                        >
-                          <Share2 size={14} />
-                        </button>
+                        {!file.isVault && (
+                          <button
+                            className="file-action-btn"
+                            onClick={(e) => openShareModal(e, file)}
+                            title="Share File"
+                            style={{ color: 'var(--accent-indigo)' }}
+                          >
+                            <Share2 size={14} />
+                          </button>
+                        )}
                         <button
                           className="file-action-btn btn-delete"
                           onClick={(e) => handleDelete(e, file.id)}
@@ -3149,7 +3808,7 @@ function App() {
                 </thead>
                 <tbody>
                   {/* Folders row list */}
-                  {activeCategory === 'all' && !searchQuery && folders.map(folder => (
+                  {(activeCategory === 'all' || activeCategory === 'vault') && !searchQuery && folders.map(folder => (
                     <tr
                       key={folder.id}
                       className="files-list-row"
@@ -3172,14 +3831,16 @@ function App() {
                         <div className="list-actions-cell" onClick={(e) => e.stopPropagation()}>
                           {!sharedFolderRootId ? (
                             <>
-                              <button
-                                className="file-action-btn"
-                                onClick={(e) => openShareModal(e, folder, 'folder')}
-                                title="Share Folder"
-                                style={{ color: 'var(--accent-indigo)', marginRight: '8px' }}
-                              >
-                                <Share2 size={14} />
-                              </button>
+                              {!folder.isVault && (
+                                <button
+                                  className="file-action-btn"
+                                  onClick={(e) => openShareModal(e, folder, 'folder')}
+                                  title="Share Folder"
+                                  style={{ color: 'var(--accent-indigo)', marginRight: '8px' }}
+                                >
+                                  <Share2 size={14} />
+                                </button>
+                              )}
                               <button
                                 className="file-action-btn btn-delete"
                                 onClick={(e) => handleDeleteFolder(e, folder.id, folder.name)}
@@ -3261,14 +3922,16 @@ function App() {
                           </button>
                           {!sharedFolderRootId && (
                             <>
-                              <button
-                                className="file-action-btn"
-                                onClick={(e) => openShareModal(e, file)}
-                                title="Share File"
-                                style={{ color: 'var(--accent-indigo)' }}
-                              >
-                                <Share2 size={14} />
-                              </button>
+                              {!file.isVault && (
+                                <button
+                                  className="file-action-btn"
+                                  onClick={(e) => openShareModal(e, file)}
+                                  title="Share File"
+                                  style={{ color: 'var(--accent-indigo)' }}
+                                >
+                                  <Share2 size={14} />
+                                </button>
+                              )}
                               <button
                                 className="file-action-btn btn-delete"
                                 onClick={(e) => handleDelete(e, file.id)}
@@ -3380,7 +4043,7 @@ function App() {
               <div className="modal-body">
                 {previewFile.category === 'images' && (
                   <img
-                    src={`${API_BASE}/api/files/download/${previewFile.id}`}
+                    src={getFileDownloadUrl(previewFile)}
                     alt={previewFile.originalName}
                     className="preview-image"
                   />
@@ -3388,7 +4051,7 @@ function App() {
 
                 {previewFile.category === 'videos' && (
                   <video
-                    src={`${API_BASE}/api/files/download/${previewFile.id}`}
+                    src={getFileDownloadUrl(previewFile)}
                     controls
                     autoPlay
                     className="preview-video"
@@ -3401,7 +4064,7 @@ function App() {
                       <Music size={40} />
                     </div>
                     <audio
-                      src={`${API_BASE}/api/files/download/${previewFile.id}`}
+                      src={getFileDownloadUrl(previewFile)}
                       controls
                       autoPlay
                       className="preview-audio"
@@ -4102,13 +4765,13 @@ function App() {
                         onClick={() => {
                           setTaggerTags(prev => ({
                             ...prev,
-                            coverArtUrl: `${API_BASE}/api/files/download/${img.id}`
+                            coverArtUrl: getFileDownloadUrl(img)
                           }));
                           setShowArchivesPicker(false);
                         }}
                       >
                         <img
-                          src={`${API_BASE}/api/files/download/${img.id}`}
+                          src={getFileDownloadUrl(img)}
                           alt={img.originalName}
                         />
                         <div className="name-label" title={img.originalName}>
@@ -4283,7 +4946,6 @@ Comment: ${distributeTags?.comment || ''}
           </div>
         )}
 
-        {/* Share Link Modal Overlay */}
         {showShareModal && shareTarget && (
           <div className="modal-overlay" onClick={() => setShowShareModal(false)}>
             <div className="modal-container glass-panel" style={{ maxWidth: '500px' }} onClick={(e) => e.stopPropagation()}>
@@ -4339,6 +5001,75 @@ Comment: ${distributeTags?.comment || ''}
                   Close
                 </button>
               </footer>
+            </div>
+          </div>
+        )}
+
+        {/* Change Vault Password Modal Overlay */}
+        {showChangeVaultPasswordModal && (
+          <div className="modal-overlay" onClick={() => setShowChangeVaultPasswordModal(false)}>
+            <div className="modal-container glass-panel" style={{ maxWidth: '440px' }} onClick={(e) => e.stopPropagation()}>
+              <header className="modal-header">
+                <span className="modal-title-text" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Key size={18} style={{ color: 'var(--accent-indigo)' }} />
+                  Change Vault Key
+                </span>
+                <button className="modal-close-btn" onClick={() => setShowChangeVaultPasswordModal(false)}>
+                  <X size={18} />
+                </button>
+              </header>
+
+              <form onSubmit={handleChangeVaultPassword}>
+                <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px', textAlign: 'left' }}>
+                  {vaultRotationError && (
+                    <div className="admin-alert-box error" style={{ marginBottom: '8px' }}>
+                      <AlertCircle size={14} />
+                      <span>{vaultRotationError}</span>
+                    </div>
+                  )}
+                  {vaultRotationSuccess && (
+                    <div className="admin-alert-box success" style={{ marginBottom: '8px' }}>
+                      <span>{vaultRotationSuccess}</span>
+                    </div>
+                  )}
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                    Changing your vault key will decrypt all existing vault files locally and re-encrypt them under your new password. This process may take a few seconds depending on file sizes.
+                  </p>
+                  <div className="login-input-group">
+                    <label className="login-input-label">New Password</label>
+                    <input
+                      type="password"
+                      className="search-input"
+                      placeholder="Enter new password"
+                      value={newVaultPasswordInput}
+                      onChange={(e) => setNewVaultPasswordInput(e.target.value)}
+                      required
+                      style={{ paddingLeft: '12px' }}
+                    />
+                  </div>
+                  <div className="login-input-group">
+                    <label className="login-input-label">Confirm New Password</label>
+                    <input
+                      type="password"
+                      className="search-input"
+                      placeholder="Confirm new password"
+                      value={confirmNewVaultPasswordInput}
+                      onChange={(e) => setConfirmNewVaultPasswordInput(e.target.value)}
+                      required
+                      style={{ paddingLeft: '12px' }}
+                    />
+                  </div>
+                </div>
+
+                <footer className="modal-footer" style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                  <button type="button" className="modal-btn" onClick={() => setShowChangeVaultPasswordModal(false)} style={{ background: 'transparent', border: '1px solid var(--glass-border)', color: 'var(--text-secondary)' }}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="glow-btn btn-action" style={{ margin: 0, padding: '8px 20px' }}>
+                    Rotate Key
+                  </button>
+                </footer>
+              </form>
             </div>
           </div>
         )}

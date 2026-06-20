@@ -36,10 +36,11 @@ function readDb() {
     if (!parsed.folders) parsed.folders = [];
     if (!parsed.scraperJobs) parsed.scraperJobs = [];
     if (!parsed.users) parsed.users = [];
+    if (!parsed.g00jKeys) parsed.g00jKeys = [];
     return parsed;
   } catch (error) {
     console.error('Error reading database, resetting to default:', error);
-    const defaultData = { files: [], folders: [], scraperJobs: [], users: [] };
+    const defaultData = { files: [], folders: [], scraperJobs: [], users: [], g00jKeys: [] };
     writeDb(defaultData);
     return defaultData;
   }
@@ -231,6 +232,36 @@ export const db = {
       const deletedUser = data.users.splice(index, 1)[0];
       writeDb(data);
       return deletedUser;
+    }
+    return null;
+  },
+
+  getG00JKeys() {
+    const data = readDb();
+    return data.g00jKeys || [];
+  },
+
+  saveG00JKey(keyObj) {
+    const data = readDb();
+    if (!data.g00jKeys) data.g00jKeys = [];
+    const index = data.g00jKeys.findIndex(k => k.key === keyObj.key);
+    if (index >= 0) {
+      data.g00jKeys[index] = { ...data.g00jKeys[index], ...keyObj };
+    } else {
+      data.g00jKeys.push(keyObj);
+    }
+    writeDb(data);
+    return keyObj;
+  },
+
+  deleteG00JKey(keyString) {
+    const data = readDb();
+    if (!data.g00jKeys) return null;
+    const index = data.g00jKeys.findIndex(k => k.key === keyString);
+    if (index >= 0) {
+      const deleted = data.g00jKeys.splice(index, 1)[0];
+      writeDb(data);
+      return deleted;
     }
     return null;
   }

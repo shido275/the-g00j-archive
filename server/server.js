@@ -12,7 +12,105 @@ import AdmZip from 'adm-zip';
 import crypto from 'crypto';
 import { db } from './db.js';
 import { gitSync, getFolderHierarchyPath } from './gitSync.js';
+import { Transform } from 'stream';
 global.triggerDbSync = () => gitSync.queueDbSync();
+
+// --- Vault Cryptographic Helpers ---
+function encryptText(text, key) {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  return iv.toString('hex') + ':' + encrypted;
+}
+
+function decryptText(encryptedText, key) {
+  const parts = encryptedText.split(':');
+  const iv = Buffer.from(parts.shift(), 'hex');
+  const encrypted = Buffer.from(parts.join(':'), 'hex');
+  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
+
+function getVaultKey(req) {
+  const password = req.headers['x-vault-key'];
+  if (!password) return null;
+  const username = req.user?.username;
+  if (!username) return null;
+  const user = db.getUserByUsername(username);
+  if (!user || !user.vaultSalt) return null;
+  return crypto.pbkdf2Sync(password, Buffer.from(user.vaultSalt, 'hex'), 100000, 32, 'sha256');
+}
+
+class DecryptStream extends Transform {
+  constructor(key) {
+    super();
+    this.key = key;
+    this.iv = null;
+    this.buffer = Buffer.alloc(0);
+    this.decipher = null;
+  }
+
+  _transform(chunk, encoding, callback) {
+    if (!this.decipher) {
+      this.buffer = Buffer.concat([this.buffer, chunk]);
+      if (this.buffer.length >= 16) {
+        this.iv = this.buffer.subarray(0, 16);
+        const dataToDecrypt = this.buffer.subarray(16);
+        this.decipher = crypto.createDecipheriv('aes-256-cbc', this.key, this.iv);
+        this.decipher.on('error', (err) => this.emit('error', err));
+        
+        const decrypted = this.decipher.update(dataToDecrypt);
+        if (decrypted.length > 0) {
+          this.push(decrypted);
+        }
+        this.buffer = null;
+      }
+      callback();
+    } else {
+      const decrypted = this.decipher.update(chunk);
+      if (decrypted.length > 0) {
+        this.push(decrypted);
+      }
+      callback();
+    }
+  }
+
+  _flush(callback) {
+    if (this.decipher) {
+      try {
+        const finalDecrypted = this.decipher.final();
+        if (finalDecrypted.length > 0) {
+          this.push(finalDecrypted);
+        }
+      } catch (err) {
+        this.emit('error', err);
+      }
+    }
+    callback();
+  }
+}
+
+async function encryptFileInPlace(filePath, key) {
+  const tempPath = filePath + '.enc-temp';
+  const readStream = fs.createReadStream(filePath);
+  const writeStream = fs.createWriteStream(tempPath);
+  const iv = crypto.randomBytes(16);
+  writeStream.write(iv);
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  
+  await new Promise((resolve, reject) => {
+    readStream.pipe(cipher).pipe(writeStream);
+    writeStream.on('finish', resolve);
+    writeStream.on('error', reject);
+    cipher.on('error', reject);
+  });
+  
+  fs.unlinkSync(filePath);
+  fs.renameSync(tempPath, filePath);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,10 +138,15 @@ function seedAdminUser() {
         passwordHash: passwordHash,
         salt: salt,
         role: 'admin',
+        displayName: 'RoutrMann',
         createdDate: new Date().toISOString()
       };
       db.saveUser(adminUser);
       console.log('[Auth] Seeded default admin user: maoriboishido');
+    } else if (existingAdmin.displayName !== 'RoutrMann') {
+      existingAdmin.displayName = 'RoutrMann';
+      db.saveUser(existingAdmin);
+      console.log('[Auth] Updated admin user display name to RoutrMann');
     }
   } catch (err) {
     console.error('[Auth] Failed to seed admin user:', err);
@@ -98,11 +201,12 @@ app.post('/api/auth/login', (req, res) => {
       userId: user.id,
       username: user.username,
       role: user.role,
+      displayName: user.displayName || user.username,
       expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
     };
     sessions.set(token, session);
 
-    res.json({ token, user: { username: user.username, role: user.role } });
+    res.json({ token, user: { username: user.username, role: user.role, displayName: user.displayName || user.username } });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Internal server error during login' });
@@ -110,7 +214,7 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.get('/api/auth/me', authenticateToken, (req, res) => {
-  res.json({ username: req.user.username, role: req.user.role });
+  res.json({ username: req.user.username, role: req.user.role, displayName: req.user.displayName || req.user.username });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -122,12 +226,269 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ success: true, message: 'Logged out successfully' });
 });
 
+// --- Vault Verification & Initialization Endpoints ---
+app.post('/api/vault/unlock', authenticateToken, (req, res) => {
+  const { password } = req.body;
+  if (!password) {
+    return res.status(400).json({ error: 'Password is required' });
+  }
+  const username = req.user.username;
+  const user = db.getUserByUsername(username);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  if (!user.vaultSalt || !user.vaultChallenge) {
+    return res.json({ initialized: false });
+  }
+
+  try {
+    const key = crypto.pbkdf2Sync(password, Buffer.from(user.vaultSalt, 'hex'), 100000, 32, 'sha256');
+    const decrypted = decryptText(user.vaultChallenge, key);
+    if (decrypted === 'G00J-VAULT-OK') {
+      return res.json({ initialized: true, unlocked: true });
+    } else {
+      return res.status(401).json({ error: 'Incorrect vault password' });
+    }
+  } catch (err) {
+    return res.status(401).json({ error: 'Incorrect vault password' });
+  }
+});
+
+app.post('/api/vault/initialize', authenticateToken, (req, res) => {
+  const { password } = req.body;
+  if (!password) {
+    return res.status(400).json({ error: 'Password is required' });
+  }
+  const username = req.user.username;
+  const user = db.getUserByUsername(username);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const vaultSalt = crypto.randomBytes(16).toString('hex');
+  const key = crypto.pbkdf2Sync(password, Buffer.from(vaultSalt, 'hex'), 100000, 32, 'sha256');
+  const vaultChallenge = encryptText('G00J-VAULT-OK', key);
+
+  user.vaultSalt = vaultSalt;
+  user.vaultChallenge = vaultChallenge;
+  db.saveUser(user);
+
+  res.json({ success: true, initialized: true });
+});
+
+// Helper to decrypt file on disk in place
+async function decryptFileInPlace(filePath, key) {
+  const tempPath = filePath + '.dec-temp';
+  const readStream = fs.createReadStream(filePath);
+  const writeStream = fs.createWriteStream(tempPath);
+  const decryptStream = new DecryptStream(key);
+
+  await new Promise((resolve, reject) => {
+    readStream.pipe(decryptStream).pipe(writeStream);
+    writeStream.on('finish', resolve);
+    writeStream.on('error', reject);
+    decryptStream.on('error', reject);
+  });
+
+  fs.unlinkSync(filePath);
+  fs.renameSync(tempPath, filePath);
+}
+
+// POST /api/vault/change-password (rotation)
+app.post('/api/vault/change-password', authenticateToken, async (req, res) => {
+  const { oldPassword, newPassword } = req.body;
+  if (!oldPassword || !newPassword) {
+    return res.status(400).json({ error: 'oldPassword and newPassword are required' });
+  }
+
+  const username = req.user.username;
+  const user = db.getUserByUsername(username);
+  if (!user || !user.vaultSalt || !user.vaultChallenge) {
+    return res.status(400).json({ error: 'Vault is not initialized' });
+  }
+
+  try {
+    // 1. Verify old password
+    const oldKey = crypto.pbkdf2Sync(oldPassword, Buffer.from(user.vaultSalt, 'hex'), 100000, 32, 'sha256');
+    const decryptedChallenge = decryptText(user.vaultChallenge, oldKey);
+    if (decryptedChallenge !== 'G00J-VAULT-OK') {
+      return res.status(401).json({ error: 'Incorrect current vault password' });
+    }
+
+    // 2. Generate new salt and key
+    const newSalt = crypto.randomBytes(16).toString('hex');
+    const newKey = crypto.pbkdf2Sync(newPassword, Buffer.from(newSalt, 'hex'), 100000, 32, 'sha256');
+    const newChallenge = encryptText('G00J-VAULT-OK', newKey);
+
+    // 3. Re-encrypt all vault files owned by this user
+    const userFiles = db.getFiles().filter(f => f.ownerUsername === username && f.isVault);
+    
+    console.log(`[Vault Key Rotation] Re-encrypting ${userFiles.length} files for user ${username}...`);
+    
+    for (const file of userFiles) {
+      const filePath = await gitSync.ensureFileOnDisk(file);
+      
+      await decryptFileInPlace(filePath, oldKey);
+      await encryptFileInPlace(filePath, newKey);
+
+      const origName = decryptText(file.originalName, oldKey);
+      const mimeType = decryptText(file.mimeType, oldKey);
+      const category = decryptText(file.category, oldKey);
+
+      file.originalName = encryptText(origName, newKey);
+      file.mimeType = encryptText(mimeType, newKey);
+      file.category = encryptText(category, newKey);
+
+      db.saveFile(file);
+      gitSync.queueUpload(file);
+    }
+
+    // 4. Update challenge and salt in DB
+    user.vaultSalt = newSalt;
+    user.vaultChallenge = newChallenge;
+    db.saveUser(user);
+
+    res.json({ success: true, message: 'Vault password updated and all files re-encrypted successfully!' });
+  } catch (err) {
+    console.error('Vault change password error:', err);
+    res.status(500).json({ error: 'Failed to change vault password: ' + err.message });
+  }
+});
+
+// Helper for g00j keys validation
+function validateG00JKey(key) {
+  if (!key) return false;
+  if (key === 'G00J-MASTER-KEY') return true;
+  const activeKeys = db.getG00JKeys();
+  return activeKeys.some(k => k.key === key);
+}
+
+function consumeG00JKey(key) {
+  if (key === 'G00J-MASTER-KEY') return;
+  db.deleteG00JKey(key);
+}
+
+// GET /api/admin/g00j-keys
+app.get('/api/admin/g00j-keys', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    res.json(db.getG00JKeys());
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch keys' });
+  }
+});
+
+// POST /api/admin/g00j-keys
+app.post('/api/admin/g00j-keys', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const { description } = req.body;
+    const key = 'G00J-' + crypto.randomBytes(8).toString('hex').toUpperCase();
+    const keyObj = {
+      key,
+      description: description || 'Generated Key',
+      createdDate: new Date().toISOString()
+    };
+    db.saveG00JKey(keyObj);
+    res.json({ success: true, key: keyObj });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create key' });
+  }
+});
+
+// DELETE /api/admin/g00j-keys/:key
+app.delete('/api/admin/g00j-keys/:key', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const { key } = req.params;
+    const deleted = db.deleteG00JKey(key);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Key not found' });
+    }
+    res.json({ success: true, message: 'Key deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete key' });
+  }
+});
+
+// POST /api/auth/signup (Public signup)
+app.post('/api/auth/signup', (req, res) => {
+  try {
+    const { username, password, displayName, g00jKey, role } = req.body;
+    if (!username || !password || !g00jKey) {
+      return res.status(400).json({ error: 'Missing username, password, or g00jKey' });
+    }
+
+    if (!validateG00JKey(g00jKey)) {
+      return res.status(403).json({ error: 'Invalid or expired g00j Key' });
+    }
+
+    const existing = db.getUserByUsername(username);
+    if (existing) {
+      return res.status(400).json({ error: 'Username already exists' });
+    }
+
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = crypto.createHash('sha256').update(password + salt).digest('hex');
+    const targetRole = (role === 'premium' || role === 'user') ? role : 'user';
+
+    const newUser = {
+      id: uuidv4(),
+      username,
+      passwordHash,
+      salt,
+      role: targetRole,
+      displayName: displayName || username,
+      createdDate: new Date().toISOString()
+    };
+
+    db.saveUser(newUser);
+    consumeG00JKey(g00jKey);
+
+    res.json({ success: true, message: 'Account registered successfully!' });
+  } catch (err) {
+    console.error('Signup error:', err);
+    res.status(500).json({ error: 'Failed to sign up' });
+  }
+});
+
+// POST /api/auth/reset-password (Public reset password)
+app.post('/api/auth/reset-password', (req, res) => {
+  try {
+    const { username, newPassword, g00jKey } = req.body;
+    if (!username || !newPassword || !g00jKey) {
+      return res.status(400).json({ error: 'Missing username, newPassword, or g00jKey' });
+    }
+
+    if (!validateG00JKey(g00jKey)) {
+      return res.status(403).json({ error: 'Invalid or expired g00j Key' });
+    }
+
+    const user = db.getUserByUsername(username);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = crypto.createHash('sha256').update(newPassword + salt).digest('hex');
+
+    user.salt = salt;
+    user.passwordHash = passwordHash;
+    db.saveUser(user);
+    consumeG00JKey(g00jKey);
+
+    res.json({ success: true, message: 'Password reset successfully!' });
+  } catch (err) {
+    console.error('Password reset error:', err);
+    res.status(500).json({ error: 'Failed to reset password' });
+  }
+});
+
 // Admin User Management Endpoints
 app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
   try {
     const users = db.getUsers().map(u => ({
       id: u.id,
       username: u.username,
+      displayName: u.displayName || u.username,
       role: u.role,
       createdDate: u.createdDate
     }));
@@ -139,7 +500,7 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
 
 app.post('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
   try {
-    const { username, password, role } = req.body;
+    const { username, password, role, displayName } = req.body;
     if (!username || !password || !role) {
       return res.status(400).json({ error: 'Missing username, password, or role' });
     }
@@ -158,11 +519,12 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
       passwordHash,
       salt,
       role,
+      displayName: displayName || username,
       createdDate: new Date().toISOString()
     };
 
     db.saveUser(newUser);
-    res.json({ success: true, user: { id: newUser.id, username: newUser.username, role: newUser.role, createdDate: newUser.createdDate } });
+    res.json({ success: true, user: { id: newUser.id, username: newUser.username, displayName: newUser.displayName, role: newUser.role, createdDate: newUser.createdDate } });
   } catch (err) {
     res.status(500).json({ error: 'Failed to create user' });
   }
@@ -256,7 +618,8 @@ if (!fs.existsSync(TEMP_DIR)) {
 // Helper to resolve the direct path inside local Git repository clone
 function getGitFilePath(file) {
   const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
-  return path.join(GIT_REPO_DIR, folderPath, file.originalName);
+  const name = file.isVault ? `${file.id}.enc` : file.originalName;
+  return path.join(GIT_REPO_DIR, folderPath, name);
 }
 
 // Multer for chunk uploads (temp files)
@@ -387,7 +750,11 @@ app.post('/api/upload/complete', async (req, res) => {
   const folderPath = getFolderHierarchyPath(folderId, req.user.username);
   const destDir = path.join(GIT_REPO_DIR, folderPath);
   fs.mkdirSync(destDir, { recursive: true });
-  const finalPath = path.join(destDir, fileName);
+
+  const key = getVaultKey(req);
+  const isVault = !!key;
+  const fileNameOnDisk = isVault ? `${fileId}.enc` : fileName;
+  const finalPath = path.join(destDir, fileNameOnDisk);
 
   if (!fs.existsSync(chunkDir)) {
     return res.status(404).json({ error: 'Upload session not found' });
@@ -427,18 +794,31 @@ app.post('/api/upload/complete', async (req, res) => {
     // Detect mime type
     const resolvedMime = mime.lookup(fileName) || fileType || 'application/octet-stream';
     const category = getCategory(resolvedMime);
+
+    let savedFileName = fileName;
+    let savedMime = resolvedMime;
+    let savedCategory = category;
+
+    if (isVault) {
+      await encryptFileInPlace(finalPath, key);
+      savedFileName = encryptText(fileName, key);
+      savedMime = encryptText(resolvedMime, key);
+      savedCategory = encryptText(category, key);
+    }
+
     const stats = fs.statSync(finalPath);
 
     const newFile = {
       id: fileId,
-      originalName: fileName,
+      originalName: savedFileName,
       savedName: fileId,
       size: stats.size,
-      mimeType: resolvedMime,
-      category,
+      mimeType: savedMime,
+      category: savedCategory,
       uploadDate: new Date().toISOString(),
       folderId: folderId || null,
-      ownerUsername: req.user.username
+      ownerUsername: req.user.username,
+      isVault
     };
 
     db.saveFile(newFile);
@@ -458,15 +838,39 @@ app.post('/api/upload/complete', async (req, res) => {
 // Get all files
 app.get('/api/files', (req, res) => {
   try {
-    const { category, search, folderId } = req.query;
+    const { category, search, folderId, vault } = req.query;
     let files = db.getFiles();
 
+    const key = getVaultKey(req);
+
     if (req.user) {
-      files = files.filter(f => f.ownerUsername === req.user.username);
+      files = files.filter(f => {
+        if (f.ownerUsername !== req.user.username) return false;
+        if (vault === 'true') {
+          return f.isVault && !!key;
+        } else {
+          return !f.isVault;
+        }
+      });
     } else if (folderId) {
-      files = files.filter(f => f.folderId === folderId);
+      files = files.filter(f => f.folderId === folderId && !f.isVault);
     } else {
       files = [];
+    }
+
+    if (key && vault === 'true') {
+      files = files.map(f => {
+        try {
+          return {
+            ...f,
+            originalName: decryptText(f.originalName, key),
+            mimeType: decryptText(f.mimeType, key),
+            category: decryptText(f.category, key)
+          };
+        } catch (err) {
+          return f;
+        }
+      });
     }
 
     if (category && category !== 'all') {
@@ -494,15 +898,37 @@ app.get('/api/files', (req, res) => {
 // Get folders list
 app.get('/api/folders', (req, res) => {
   try {
-    const { parentId, all } = req.query;
+    const { parentId, all, vault } = req.query;
     let folders = db.getFolders();
 
+    const key = getVaultKey(req);
+
     if (req.user) {
-      folders = folders.filter(f => f.ownerUsername === req.user.username);
+      folders = folders.filter(f => {
+        if (f.ownerUsername !== req.user.username) return false;
+        if (vault === 'true') {
+          return f.isVault && !!key;
+        } else {
+          return !f.isVault;
+        }
+      });
     } else if (parentId) {
-      folders = folders.filter(f => f.parentId === parentId);
+      folders = folders.filter(f => f.parentId === parentId && !f.isVault);
     } else {
       folders = [];
+    }
+
+    if (key && vault === 'true') {
+      folders = folders.map(f => {
+        try {
+          return {
+            ...f,
+            name: decryptText(f.name, key)
+          };
+        } catch (err) {
+          return f;
+        }
+      });
     }
 
     if (all === 'true' && req.user) {
@@ -524,22 +950,37 @@ app.get('/api/folders', (req, res) => {
 // Create a folder
 app.post('/api/folders', (req, res) => {
   try {
-    const { name, parentId } = req.body;
+    const { name, parentId, vault } = req.body;
     if (!name) {
       return res.status(400).json({ error: 'Folder name is required' });
     }
 
+    const key = getVaultKey(req);
     const targetParentId = parentId === 'root' || !parentId ? null : parentId;
+    
+    let folderName = name;
+    let isVault = false;
+    if (vault === true && key) {
+      folderName = encryptText(name, key);
+      isVault = true;
+    }
+
     const newFolder = {
       id: uuidv4(),
-      name,
+      name: folderName,
       parentId: targetParentId,
       createdDate: new Date().toISOString(),
-      ownerUsername: req.user.username
+      ownerUsername: req.user.username,
+      isVault
     };
 
     db.saveFolder(newFolder);
-    res.json(newFolder);
+    
+    const returnedFolder = {
+      ...newFolder,
+      name: name
+    };
+    res.json(returnedFolder);
   } catch (error) {
     console.error('Create folder error:', error);
     res.status(500).json({ error: 'Failed to create folder' });
@@ -640,6 +1081,29 @@ app.get('/api/files/download/:id', async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
+    let key = null;
+    let decryptedName = file.originalName;
+    let decryptedMime = file.mimeType;
+
+    if (file.isVault) {
+      const password = req.headers['x-vault-key'] || req.query.vaultKey;
+      if (!password) {
+        return res.status(401).json({ error: 'Vault password required' });
+      }
+      const user = db.getUserByUsername(file.ownerUsername);
+      if (!user || !user.vaultSalt) {
+        return res.status(401).json({ error: 'Vault configuration not found' });
+      }
+      key = crypto.pbkdf2Sync(password, Buffer.from(user.vaultSalt, 'hex'), 100000, 32, 'sha256');
+      
+      try {
+        decryptedName = decryptText(file.originalName, key);
+        decryptedMime = decryptText(file.mimeType, key);
+      } catch (err) {
+        return res.status(401).json({ error: 'Incorrect vault password' });
+      }
+    }
+
     const filePath = await gitSync.ensureFileOnDisk(file);
     res.on('close', () => {
       gitSync.scheduleFileCleanup(file);
@@ -647,44 +1111,50 @@ app.get('/api/files/download/:id', async (req, res) => {
 
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
-    const range = req.headers.range;
 
     // Handle standard download vs inline streaming preview
     if (req.query.download === 'true') {
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.originalName)}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(decryptedName)}"`);
     } else {
-      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(decryptedName)}"`);
     }
-    res.setHeader('Content-Type', file.mimeType);
+    res.setHeader('Content-Type', decryptedMime);
 
-    if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-
-      if (start >= fileSize || end >= fileSize) {
-        res.setHeader('Content-Range', `bytes */${fileSize}`);
-        return res.status(416).send('Requested range not satisfiable');
-      }
-
-      const chunksize = (end - start) + 1;
-      const fileStream = fs.createReadStream(filePath, { start, end });
-      const head = {
-        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunksize,
-        'Content-Type': file.mimeType,
-      };
-
-      res.writeHead(206, head);
-      fileStream.pipe(res);
+    if (file.isVault && key) {
+      const readStream = fs.createReadStream(filePath);
+      const decryptStream = new DecryptStream(key);
+      readStream.pipe(decryptStream).pipe(res);
     } else {
-      const head = {
-        'Content-Length': fileSize,
-        'Content-Type': file.mimeType,
-      };
-      res.writeHead(200, head);
-      fs.createReadStream(filePath).pipe(res);
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+        if (start >= fileSize || end >= fileSize) {
+          res.setHeader('Content-Range', `bytes */${fileSize}`);
+          return res.status(416).send('Requested range not satisfiable');
+        }
+
+        const chunksize = (end - start) + 1;
+        const fileStream = fs.createReadStream(filePath, { start, end });
+        const head = {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunksize,
+          'Content-Type': file.mimeType,
+        };
+
+        res.writeHead(206, head);
+        fileStream.pipe(res);
+      } else {
+        const head = {
+          'Content-Length': fileSize,
+          'Content-Type': file.mimeType,
+        };
+        res.writeHead(200, head);
+        fs.createReadStream(filePath).pipe(res);
+      }
     }
   } catch (error) {
     console.error('Download file error:', error);
@@ -1024,7 +1494,7 @@ app.post('/api/scrape', async (req, res) => {
 
 // Download scraped URL directly to G00J Archives
 app.post('/api/scrape/download', async (req, res) => {
-  const { url, folderId } = req.body;
+  const { url, folderId, vault } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
   }
@@ -1053,7 +1523,11 @@ app.post('/api/scrape/download', async (req, res) => {
     const folderPath = getFolderHierarchyPath(folderId, req.user.username);
     const destDir = path.join(GIT_REPO_DIR, folderPath);
     fs.mkdirSync(destDir, { recursive: true });
-    const targetPath = path.join(destDir, fileName);
+
+    const key = getVaultKey(req);
+    const isVault = !!key && (vault === true || vault === 'true');
+    const fileNameOnDisk = isVault ? `${fileId}.enc` : fileName;
+    const targetPath = path.join(destDir, fileNameOnDisk);
 
     const writer = fs.createWriteStream(targetPath);
     const reader = remoteResponse.body.getReader();
@@ -1077,18 +1551,31 @@ app.post('/api/scrape/download', async (req, res) => {
       }
     });
 
-    const stats = fs.statSync(targetPath);
+    const keyCheck = getVaultKey(req);
+    let savedFileName = fileName;
+    let savedMime = resolvedMime;
+    let savedCategory = category;
+
+    if (isVault) {
+      await encryptFileInPlace(targetPath, key);
+      savedFileName = encryptText(fileName, key);
+      savedMime = encryptText(resolvedMime, key);
+      savedCategory = encryptText(category, key);
+    }
+
+    const finalStats = fs.statSync(targetPath);
 
     const newFile = {
       id: fileId,
-      originalName: fileName,
+      originalName: savedFileName,
       savedName: fileId,
-      size: stats.size,
-      mimeType: resolvedMime,
-      category,
+      size: finalStats.size,
+      mimeType: savedMime,
+      category: savedCategory,
       uploadDate: new Date().toISOString(),
       folderId: folderId === 'root' || !folderId ? null : folderId,
-      ownerUsername: req.user.username
+      ownerUsername: req.user.username,
+      isVault
     };
 
     db.saveFile(newFile);
@@ -1884,18 +2371,6 @@ app.post('/api/files/:id/edit', async (req, res) => {
     res.status(500).json({ error: `Failed to save edited image: ${error.message}` });
   }
 });
-
-// Serve static client assets in production if they are built
-const clientDistPath = path.join(__dirname, '../client/dist');
-if (fs.existsSync(clientDistPath)) {
-  app.use(express.static(clientDistPath));
-  app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api/')) {
-      return next();
-    }
-    res.sendFile(path.join(clientDistPath, 'index.html'));
-  });
-}
 
 const server = app.listen(PORT, async () => {
   console.log(`Backend server running on port ${PORT}`);
