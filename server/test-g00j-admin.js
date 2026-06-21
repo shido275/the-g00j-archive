@@ -17,23 +17,24 @@ const TEST_DISPLAY = 'Routr Explorer';
 const TEST_VAULT_PASS_1 = 'vaultpass1';
 const TEST_VAULT_PASS_2 = 'vaultpass2';
 
-// 1. Pre-cleanup
-const existingUser = db.getUserByUsername(TEST_USER);
-if (existingUser) {
-  db.deleteUser(existingUser.id);
-}
-db.getFiles().forEach(f => {
-  if (f.ownerUsername === TEST_USER) {
-    db.deleteFile(f.id);
-  }
-});
-
 // Import and boot server
 console.log('[Test] Booting server on port 5002...');
 import('./server.js').then(async () => {
   await new Promise(r => setTimeout(r, 6000));
 
   try {
+    // 1. Pre-cleanup after db restore
+    console.log('[Test] Performing pre-cleanup...');
+    const existingUser = db.getUserByUsername(TEST_USER);
+    if (existingUser) {
+      db.deleteUser(existingUser.id);
+    }
+    db.getFiles().forEach(f => {
+      if (f.ownerUsername === TEST_USER) {
+        db.deleteFile(f.id);
+      }
+    });
+
     // 2. Verify admin display name seeding
     console.log('[Test] Checking seeded admin display name...');
     const adminUser = db.getUserByUsername('maoriboishido');
@@ -66,7 +67,7 @@ import('./server.js').then(async () => {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${adminToken}`
       },
-      body: JSON.stringify({ description: 'Invite for Routr Explorer' })
+      body: JSON.stringify({ description: 'Invite for Routr Explorer', role: 'premium' })
     });
     if (!keyGenRes.ok) {
       throw new Error('Failed to generate invite key');
@@ -84,7 +85,6 @@ import('./server.js').then(async () => {
         username: TEST_USER,
         password: TEST_PASS,
         displayName: TEST_DISPLAY,
-        role: 'premium',
         g00jKey: g00jKey
       })
     });
@@ -267,6 +267,63 @@ import('./server.js').then(async () => {
       throw new Error('User login failed with reset password');
     }
     console.log('[Test] Login with reset password verified.');
+
+    // 14b. Verify Key Expiration
+    console.log('[Test] Verification of Key Expiration...');
+    // Create an expired key
+    const expiredKeyGenRes = await fetch('http://localhost:5002/api/admin/g00j-keys', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${adminToken}`
+      },
+      body: JSON.stringify({
+        description: 'Expired Key Test',
+        expirationType: 'custom',
+        customDate: new Date(Date.now() - 10000).toISOString() // expired 10 seconds ago
+      })
+    });
+    const { key: expiredKeyObj } = await expiredKeyGenRes.json();
+    const expiredG00jKey = expiredKeyObj.key;
+    console.log('[Test] Created expired key:', expiredG00jKey);
+
+    // Try signing up with the expired key
+    const expiredSignupRes = await fetch('http://localhost:5002/api/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'expiredtestuser',
+        password: 'somepassword123',
+        displayName: 'Expired Test',
+        g00jKey: expiredG00jKey
+      })
+    });
+    if (expiredSignupRes.ok) {
+      throw new Error('Security Breach: Registered account using an expired invite key!');
+    }
+    console.log('[Test] Verified expired key was rejected for signup.');
+
+    // Create a key with 1 day expiration and assert it is set in future
+    const dayKeyGenRes = await fetch('http://localhost:5002/api/admin/g00j-keys', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${adminToken}`
+      },
+      body: JSON.stringify({
+        description: '1 Day Key Test',
+        expirationType: 'day'
+      })
+    });
+    const { key: dayKeyObj } = await dayKeyGenRes.json();
+    if (!dayKeyObj.expiresAt || new Date(dayKeyObj.expiresAt) <= new Date()) {
+      throw new Error('Key with 1 day expiration does not have a future expiresAt!');
+    }
+    console.log('[Test] Verified 1 day expiration calculation.');
+
+    // Clean up expired key and day key from database
+    db.deleteG00JKey(expiredG00jKey);
+    db.deleteG00JKey(dayKeyObj.key);
 
     // 15. Clean up test database assets
     console.log('[Test] Cleaning up...');

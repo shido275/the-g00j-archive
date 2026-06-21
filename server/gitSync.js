@@ -56,7 +56,15 @@ export function getFolderHierarchyPath(folderId, ownerUsername) {
 
 async function runGitCmd(cmd, dir = GIT_REPO_DIR) {
   try {
-    const { stdout, stderr } = await execPromise(cmd, { cwd: dir });
+    const { stdout, stderr } = await execPromise(cmd, {
+      cwd: dir,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_ASKPASS: 'echo',
+        SSH_ASKPASS: 'echo'
+      }
+    });
     return { stdout, stderr };
   } catch (err) {
     const errMsg = (err.message || '') + (err.stdout || '') + (err.stderr || '');
@@ -290,6 +298,22 @@ export const gitSync = {
         console.log('[Git Sync] Database state successfully synced to GitHub.');
       } catch (err) {
         console.error('[Git Sync] Failed to sync database to GitHub:', err);
+      }
+    });
+  },
+
+  syncVeraCryptFile(username) {
+    const relativePath = path.join(username, 'personal_vault.hc').replace(/\\/g, '/');
+    enqueueGitTask(async () => {
+      console.log(`[Git Sync] Syncing VeraCrypt container for ${username} to GitHub...`);
+      try {
+        await runGitCmd('git pull --rebase origin main').catch(() => {});
+        await runGitCmd(`git add "${relativePath}"`);
+        await runGitCmd(`git commit -m "Update VeraCrypt vault for ${username}"`);
+        await runGitCmd('git push origin main');
+        console.log(`[Git Sync] Successfully synced VeraCrypt container for ${username}`);
+      } catch (err) {
+        console.error(`[Git Sync] Failed to sync VeraCrypt container for ${username}`, err);
       }
     });
   }

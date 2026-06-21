@@ -361,7 +361,12 @@ function validateG00JKey(key) {
   if (!key) return false;
   if (key === 'G00J-MASTER-KEY') return true;
   const activeKeys = db.getG00JKeys();
-  return activeKeys.some(k => k.key === key);
+  const found = activeKeys.find(k => k.key === key);
+  if (!found) return false;
+  if (found.expiresAt && new Date(found.expiresAt) < new Date()) {
+    return false;
+  }
+  return true;
 }
 
 function consumeG00JKey(key) {
@@ -381,12 +386,28 @@ app.get('/api/admin/g00j-keys', authenticateToken, requireAdmin, (req, res) => {
 // POST /api/admin/g00j-keys
 app.post('/api/admin/g00j-keys', authenticateToken, requireAdmin, (req, res) => {
   try {
-    const { description } = req.body;
+    const { description, role, expirationType, customDate } = req.body;
     const key = 'G00J-' + crypto.randomBytes(8).toString('hex').toUpperCase();
+    const targetRole = (role === 'premium' || role === 'user') ? role : 'user';
+
+    let expiresAt = null;
+    const now = new Date();
+    if (expirationType === 'day') {
+      expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    } else if (expirationType === 'week') {
+      expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    } else if (expirationType === 'month') {
+      expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    } else if (expirationType === 'custom' && customDate) {
+      expiresAt = new Date(customDate).toISOString();
+    }
+
     const keyObj = {
       key,
       description: description || 'Generated Key',
-      createdDate: new Date().toISOString()
+      role: targetRole,
+      expiresAt,
+      createdDate: now.toISOString()
     };
     db.saveG00JKey(keyObj);
     res.json({ success: true, key: keyObj });
@@ -426,9 +447,18 @@ app.post('/api/auth/signup', (req, res) => {
       return res.status(400).json({ error: 'Username already exists' });
     }
 
+    // Determine role from the g00jKey
+    let targetRole = 'user';
+    if (g00jKey !== 'G00J-MASTER-KEY') {
+      const activeKeys = db.getG00JKeys();
+      const foundKey = activeKeys.find(k => k.key === g00jKey);
+      if (foundKey) {
+        targetRole = foundKey.role || 'user';
+      }
+    }
+
     const salt = crypto.randomBytes(16).toString('hex');
     const passwordHash = crypto.createHash('sha256').update(password + salt).digest('hex');
-    const targetRole = (role === 'premium' || role === 'user') ? role : 'user';
 
     const newUser = {
       id: uuidv4(),
@@ -441,6 +471,7 @@ app.post('/api/auth/signup', (req, res) => {
     };
 
     db.saveUser(newUser);
+    ensureVeraCryptFile(username);
     consumeG00JKey(g00jKey);
 
     res.json({ success: true, message: 'Account registered successfully!' });
@@ -524,6 +555,7 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, (req, res) => {
     };
 
     db.saveUser(newUser);
+    ensureVeraCryptFile(username);
     res.json({ success: true, user: { id: newUser.id, username: newUser.username, displayName: newUser.displayName, role: newUser.role, createdDate: newUser.createdDate } });
   } catch (err) {
     res.status(500).json({ error: 'Failed to create user' });
@@ -589,6 +621,13 @@ app.use((req, res, next) => {
   if (req.path === '/api/auth/login' && req.method === 'POST') {
     return next();
   }
+
+  // Prioritize authentication if credentials/headers are present
+  const authHeader = req.headers['authorization'];
+  if (authHeader) {
+    return authenticateToken(req, res, next);
+  }
+
   // Guest folder share access: bypass auth on GET /api/files if folderId is provided
   if (req.path === '/api/files' && req.method === 'GET' && req.query.folderId) {
     return next();
@@ -613,6 +652,25 @@ const TEMP_DIR = path.join(DATA_DIR, 'temp');
 
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
+}
+
+function ensureVeraCryptFile(username) {
+  try {
+    const userDir = path.join(GIT_REPO_DIR, username);
+    if (!fs.existsSync(userDir)) {
+      fs.mkdirSync(userDir, { recursive: true });
+    }
+    const vaultPath = path.join(userDir, 'personal_vault.hc');
+    if (!fs.existsSync(vaultPath)) {
+      // Write 64 KB of random data representing a VeraCrypt encrypted file volume
+      const data = crypto.randomBytes(64 * 1024);
+      fs.writeFileSync(vaultPath, data);
+      console.log(`[Vault] Created VeraCrypt container file for user ${username} at ${vaultPath}`);
+      gitSync.syncVeraCryptFile(username);
+    }
+  } catch (err) {
+    console.error(`[Vault] Failed to ensure/create VeraCrypt file for user ${username}:`, err);
+  }
 }
 
 // Helper to resolve the direct path inside local Git repository clone
@@ -746,6 +804,61 @@ app.post('/api/upload/complete', async (req, res) => {
   }
 
   const chunkDir = path.join(TEMP_DIR, uploadId);
+  if (!fs.existsSync(chunkDir)) {
+    return res.status(404).json({ error: 'Upload session not found' });
+  }
+
+  if (fileName === 'personal_vault.hc') {
+    // This is replacing the user's personal VeraCrypt container
+    const vaultPath = path.join(GIT_REPO_DIR, req.user.username, 'personal_vault.hc');
+    const writeStream = fs.createWriteStream(vaultPath);
+    try {
+      for (let i = 0; i < totalChunks; i++) {
+        const chunkPath = path.join(chunkDir, String(i));
+        if (!fs.existsSync(chunkPath)) {
+          throw new Error(`Chunk ${i} is missing`);
+        }
+        await new Promise((resolve, reject) => {
+          const readStream = fs.createReadStream(chunkPath);
+          readStream.pipe(writeStream, { end: false });
+          readStream.on('end', resolve);
+          readStream.on('error', reject);
+        });
+      }
+      writeStream.end();
+      await new Promise((resolve, reject) => {
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+      });
+
+      // Cleanup temp directory
+      fs.rmSync(chunkDir, { recursive: true, force: true });
+
+      // Trigger sync
+      gitSync.syncVeraCryptFile(req.user.username);
+
+      return res.json({
+        success: true,
+        file: {
+          id: `veracrypt-vault-${req.user.username}`,
+          originalName: 'personal_vault.hc',
+          savedName: 'personal_vault.hc',
+          size: fs.statSync(vaultPath).size,
+          mimeType: 'application/octet-stream',
+          category: 'others',
+          uploadDate: new Date().toISOString(),
+          folderId: folderId || null,
+          ownerUsername: req.user.username,
+          isVault: false,
+          isVeraCrypt: true
+        }
+      });
+    } catch (error) {
+      console.error('Merge chunks error for personal_vault.hc:', error);
+      return res.status(500).json({ error: 'Failed to merge chunks for personal_vault.hc' });
+    }
+  }
+
   const fileId = uuidv4() + path.extname(fileName);
   const folderPath = getFolderHierarchyPath(folderId, req.user.username);
   const destDir = path.join(GIT_REPO_DIR, folderPath);
@@ -844,6 +957,7 @@ app.get('/api/files', (req, res) => {
     const key = getVaultKey(req);
 
     if (req.user) {
+      ensureVeraCryptFile(req.user.username);
       files = files.filter(f => {
         if (f.ownerUsername !== req.user.username) return false;
         if (vault === 'true') {
@@ -886,6 +1000,32 @@ app.get('/api/files', (req, res) => {
     if (!search) {
       const targetFolderId = folderId === 'root' || !folderId ? null : folderId;
       files = files.filter(f => f.folderId === targetFolderId);
+    }
+
+    // Inject the VeraCrypt file record at the very end so it is never filtered out by category, search or folderId
+    if (req.user) {
+      const hasVeraCryptFile = files.some(f => f.isVeraCrypt);
+      if (!hasVeraCryptFile) {
+        const vaultPath = path.join(GIT_REPO_DIR, req.user.username, 'personal_vault.hc');
+        let fileSize = 65536;
+        if (fs.existsSync(vaultPath)) {
+          fileSize = fs.statSync(vaultPath).size;
+        }
+        const veraCryptRecord = {
+          id: `veracrypt-vault-${req.user.username}`,
+          originalName: 'personal_vault.hc',
+          savedName: 'personal_vault.hc',
+          size: fileSize,
+          mimeType: 'application/octet-stream',
+          category: 'others',
+          uploadDate: new Date().toISOString(),
+          folderId: folderId === 'root' || !folderId ? null : folderId,
+          ownerUsername: req.user.username,
+          isVault: false,
+          isVeraCrypt: true
+        };
+        files.unshift(veraCryptRecord);
+      }
     }
 
     res.json(files);
@@ -1048,6 +1188,28 @@ app.delete('/api/folders/:id', (req, res) => {
 // Get single file details for sharing
 app.get('/api/files/:id', (req, res) => {
   try {
+    if (req.params.id.startsWith('veracrypt-vault-')) {
+      const username = req.params.id.replace('veracrypt-vault-', '');
+      const vaultPath = path.join(GIT_REPO_DIR, username, 'personal_vault.hc');
+      let fileSize = 65536;
+      if (fs.existsSync(vaultPath)) {
+        fileSize = fs.statSync(vaultPath).size;
+      }
+      return res.json({
+        id: req.params.id,
+        originalName: 'personal_vault.hc',
+        savedName: 'personal_vault.hc',
+        size: fileSize,
+        mimeType: 'application/octet-stream',
+        category: 'others',
+        uploadDate: new Date().toISOString(),
+        folderId: null,
+        ownerUsername: username,
+        isVault: false,
+        isVeraCrypt: true
+      });
+    }
+
     const file = db.getFile(req.params.id);
     if (!file) {
       return res.status(404).json({ error: 'File not found' });
@@ -1076,6 +1238,20 @@ app.get('/api/folders/:id', (req, res) => {
 // Download/Stream file with support for HTTP Range requests
 app.get('/api/files/download/:id', async (req, res) => {
   try {
+    if (req.params.id.startsWith('veracrypt-vault-')) {
+      const username = req.params.id.replace('veracrypt-vault-', '');
+      const filePath = path.join(GIT_REPO_DIR, username, 'personal_vault.hc');
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'Vault file not found' });
+      }
+      const stat = fs.statSync(filePath);
+      res.setHeader('Content-Disposition', `attachment; filename="personal_vault.hc"`);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Length', stat.size);
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    }
+
     const file = db.getFile(req.params.id);
     if (!file) {
       return res.status(404).json({ error: 'File not found' });

@@ -3648,6 +3648,72 @@ function App() {
           ) : viewMode === 'grid' ? (
             // Grid Layout
             <div className="files-grid">
+              {/* VeraCrypt File (Always at the very top of user folders) */}
+              {(() => {
+                const veraCryptFile = files.find(f => f.isVeraCrypt);
+                if (!veraCryptFile) return null;
+                return (
+                  <div
+                    key={veraCryptFile.id}
+                    className="file-card glass-card veracrypt-vault-card"
+                    onClick={() => setPreviewFile(veraCryptFile)}
+                    style={{
+                      cursor: 'pointer',
+                      border: '1px solid rgba(168, 85, 247, 0.4)',
+                      boxShadow: '0 0 15px rgba(168, 85, 247, 0.15)',
+                      background: 'linear-gradient(135deg, rgba(26, 21, 44, 0.6) 0%, rgba(13, 10, 24, 0.8) 100%)'
+                    }}
+                  >
+                    <div className="file-card-preview" style={{ height: '120px', background: 'rgba(168, 85, 247, 0.05)', position: 'relative' }}>
+                      <div className="file-icon-wrapper" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc', width: '48px', height: '48px' }}>
+                        <Lock size={22} />
+                      </div>
+                      <span style={{
+                        position: 'absolute',
+                        top: '8px',
+                        right: '8px',
+                        fontSize: '0.65rem',
+                        background: 'rgba(168, 85, 247, 0.3)',
+                        color: '#e9d5ff',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        fontWeight: 'bold',
+                        letterSpacing: '0.5px'
+                      }}>
+                        SECURE VAULT
+                      </span>
+                    </div>
+                    <div className="file-card-info" style={{ gap: '2px' }}>
+                      <span className="file-name" title={veraCryptFile.originalName} style={{ color: '#f3e8ff', fontWeight: '600' }}>
+                        {veraCryptFile.originalName}
+                      </span>
+                      <div className="file-meta">
+                        <span>VeraCrypt Container</span>
+                        <span>{formatBytes(veraCryptFile.size)}</span>
+                      </div>
+                    </div>
+                    <div className="file-card-actions" style={{ marginTop: '12px', paddingTop: '12px' }}>
+                      <button
+                        className="file-action-btn"
+                        onClick={(e) => { e.stopPropagation(); setPreviewFile(veraCryptFile); }}
+                        title="Open VeraCrypt Vault"
+                        style={{ color: '#c084fc' }}
+                      >
+                        <Eye size={14} />
+                      </button>
+                      <button
+                        className="file-action-btn"
+                        onClick={(e) => handleDownload(e, veraCryptFile)}
+                        title="Download Vault Container"
+                        style={{ color: '#c084fc' }}
+                      >
+                        <Download size={14} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Folder list */}
               {(activeCategory === 'all' || activeCategory === 'vault') && !searchQuery && folders.map(folder => (
                 <div
@@ -3697,7 +3763,7 @@ function App() {
               ))}
 
               {/* Files list */}
-              {files.map(file => (
+              {files.filter(f => !f.isVeraCrypt).map(file => (
                 <div
                   key={file.id}
                   className="file-card glass-card"
@@ -3807,6 +3873,68 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
+                  {/* VeraCrypt File Row */}
+                  {(() => {
+                    const veraCryptFile = files.find(f => f.isVeraCrypt);
+                    if (!veraCryptFile) return null;
+                    return (
+                      <tr
+                        key={veraCryptFile.id}
+                        className="files-list-row veracrypt-vault-row"
+                        onClick={() => setPreviewFile(veraCryptFile)}
+                        style={{
+                          cursor: 'pointer',
+                          background: 'linear-gradient(90deg, rgba(168, 85, 247, 0.08) 0%, rgba(168, 85, 247, 0.02) 100%)',
+                          borderLeft: '3px solid #a855f7'
+                        }}
+                      >
+                        <td>
+                          <div className="list-file-name-cell">
+                            <div className="list-icon-box" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc' }}>
+                              <Lock size={18} />
+                            </div>
+                            <span className="list-file-name-text" title={veraCryptFile.originalName} style={{ color: '#f3e8ff', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              {veraCryptFile.originalName}
+                              <span style={{
+                                fontSize: '0.6rem',
+                                background: 'rgba(168, 85, 247, 0.3)',
+                                color: '#e9d5ff',
+                                padding: '1px 5px',
+                                borderRadius: '4px',
+                                fontWeight: 'bold',
+                                verticalAlign: 'middle'
+                              }}>
+                                SECURE VAULT
+                              </span>
+                            </span>
+                          </div>
+                        </td>
+                        <td className="list-size-cell" style={{ color: '#e9d5ff' }}>{formatBytes(veraCryptFile.size)}</td>
+                        <td className="list-date-cell" style={{ color: '#e9d5ff' }}>VeraCrypt Container</td>
+                        <td>
+                          <div className="list-actions-cell" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              className="file-action-btn"
+                              onClick={() => setPreviewFile(veraCryptFile)}
+                              title="Open VeraCrypt Vault"
+                              style={{ color: '#c084fc', marginRight: '8px' }}
+                            >
+                              <Eye size={14} />
+                            </button>
+                            <button
+                              className="file-action-btn"
+                              onClick={(e) => handleDownload(e, veraCryptFile)}
+                              title="Download Vault Container"
+                              style={{ color: '#c084fc' }}
+                            >
+                              <Download size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })()}
+
                   {/* Folders row list */}
                   {(activeCategory === 'all' || activeCategory === 'vault') && !searchQuery && folders.map(folder => (
                     <tr
@@ -3858,7 +3986,7 @@ function App() {
                   ))}
 
                   {/* Files row list */}
-                  {files.map(file => (
+                  {files.filter(f => !f.isVeraCrypt).map(file => (
                     <tr
                       key={file.id}
                       className="files-list-row"
