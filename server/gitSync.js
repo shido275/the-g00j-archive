@@ -1,24 +1,24 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { Readable } from 'stream';
+import { finished } from 'stream/promises';
 import { db } from './db.js';
-
-const execPromise = promisify(exec);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DATA_DIR = path.join(__dirname, 'data');
 const GIT_REPO_DIR = path.join(DATA_DIR, 'github-repo');
-const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 
-const gitQueue = [];
-let gitProcessing = false;
+const STORAGE_SERVER_URL = 'http://127.0.0.1:5005';
+
+const taskQueue = [];
+let taskProcessing = false;
 const activeCleanups = new Map();
+const pendingUploads = new Set();
 
-// Resolve folder hierarchy to create directory path in git clone
+// Resolve folder hierarchy to create directory path in storage layout
 export function getFolderHierarchyPath(folderId, ownerUsername) {
   const folders = db.getFolders();
   const pathParts = [];
@@ -54,46 +54,25 @@ export function getFolderHierarchyPath(folderId, ownerUsername) {
   return pathParts.join('/');
 }
 
-async function runGitCmd(cmd, dir = GIT_REPO_DIR) {
-  try {
-    const { stdout, stderr } = await execPromise(cmd, {
-      cwd: dir,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-        GIT_ASKPASS: 'echo',
-        SSH_ASKPASS: 'echo'
-      }
-    });
-    return { stdout, stderr };
-  } catch (err) {
-    const errMsg = (err.message || '') + (err.stdout || '') + (err.stderr || '');
-    if (cmd.includes('commit') && (errMsg.includes('nothing to commit') || errMsg.includes('working tree clean'))) {
-      return { stdout: '', stderr: err.message };
-    }
-    throw err;
-  }
-}
+async function processTaskQueue() {
+  if (taskProcessing) return;
+  taskProcessing = true;
 
-async function processGitQueue() {
-  if (gitProcessing) return;
-  gitProcessing = true;
-
-  while (gitQueue.length > 0) {
-    const task = gitQueue.shift();
+  while (taskQueue.length > 0) {
+    const task = taskQueue.shift();
     try {
       await task();
     } catch (err) {
-      console.error('[Git Sync] Error processing sync task:', err);
+      console.error('[Storage Sync Queue] Error processing task:', err);
     }
   }
 
-  gitProcessing = false;
+  taskProcessing = false;
 }
 
-function enqueueGitTask(task) {
-  gitQueue.push(task);
-  processGitQueue();
+function enqueueTask(task) {
+  taskQueue.push(task);
+  processTaskQueue();
 }
 
 export const gitSync = {
@@ -103,71 +82,79 @@ export const gitSync = {
         fs.mkdirSync(GIT_REPO_DIR, { recursive: true });
       }
 
-      let cloneUrl = 'https://github.com/shido275/The-g00j-Files.git';
-      if (process.env.GITHUB_TOKEN) {
-        cloneUrl = `https://${process.env.GITHUB_TOKEN}@github.com/shido275/The-g00j-Files.git`;
-      }
-
-      if (!fs.existsSync(path.join(GIT_REPO_DIR, '.git'))) {
-        console.log('[Git Sync] Cloning private repository into storage sync folder...');
-        await execPromise(`git clone ${cloneUrl} .`, { cwd: GIT_REPO_DIR });
-        console.log('[Git Sync] Repository cloned successfully.');
+      console.log('[Storage Sync] Initializing synchronization with database/storage server...');
+      
+      const res = await fetch(`${STORAGE_SERVER_URL}/api/db`);
+      if (res.ok) {
+        const remoteDb = await res.json();
+        const localDbPath = path.join(DATA_DIR, 'db.json');
+        
+        // If the storage server has database entries, update local db
+        if (remoteDb && (remoteDb.files?.length > 0 || remoteDb.folders?.length > 0 || remoteDb.users?.length > 0)) {
+          console.log('[Storage Sync] Restoring database state from storage server...');
+          fs.writeFileSync(localDbPath, JSON.stringify(remoteDb, null, 2), 'utf8');
+        } else {
+          // If storage server database is empty but we have local database, push to storage server
+          if (fs.existsSync(localDbPath)) {
+            console.log('[Storage Sync] Pushing local database to empty storage server...');
+            const localDb = JSON.parse(fs.readFileSync(localDbPath, 'utf8'));
+            await fetch(`${STORAGE_SERVER_URL}/api/db`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(localDb)
+            });
+          }
+        }
       } else {
-        console.log('[Git Sync] Initializing pull/rebase to ensure in sync...');
-        await runGitCmd('git pull --rebase origin main').catch(() => {
-          console.log('[Git Sync] Local repository is empty or origin/main not found, skipping initial pull.');
-        });
-      }
-
-      // Configure default local git user identity for commits
-      await runGitCmd('git config user.name "G00J Archives Server"');
-      await runGitCmd('git config user.email "server@g00j-archives.local"');
-
-      // Database Restoration on Startup
-      const repoDbPath = path.join(GIT_REPO_DIR, 'db.json');
-      const localDbPath = path.join(DATA_DIR, 'db.json');
-      if (fs.existsSync(repoDbPath)) {
-        console.log('[Git Sync] Restoring database state from remote GitHub repository...');
-        fs.copyFileSync(repoDbPath, localDbPath);
-      } else {
-        console.log('[Git Sync] No remote database found, starting with local instance.');
+        console.error(`[Storage Sync] Failed to connect to storage server: ${res.statusText}`);
       }
     } catch (err) {
-      console.error('[Git Sync] Error in initGitRepo:', err);
+      console.error('[Storage Sync] Error in initGitRepo connection check:', err.message);
     }
   },
 
   queueUpload(file) {
+    const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
     const fileNameOnDisk = file.isVault ? `${file.id}.enc` : file.originalName;
-    const commitMsg = file.isVault ? "Upload secure file" : `Upload ${file.originalName}`;
-    enqueueGitTask(async () => {
-      console.log(`[Git Sync] Syncing upload to GitHub: ${file.isVault ? 'secure file' : file.originalName}`);
+    const destFilePath = path.join(GIT_REPO_DIR, folderPath, fileNameOnDisk);
 
-      // 1. Pull latest to avoid push conflicts
-      try {
-        await runGitCmd('git pull --rebase origin main');
-      } catch (err) {
-        console.log('[Git Sync] Pull failed or branch not set up. Proceeding...');
+    pendingUploads.add(file.id);
+
+    enqueueTask(async () => {
+      console.log(`[Storage Sync] Uploading ${file.isVault ? 'secure file' : file.originalName} to storage server...`);
+      
+      if (!fs.existsSync(destFilePath)) {
+        console.error(`[Storage Sync] Upload source file not found at ${destFilePath}`);
+        pendingUploads.delete(file.id);
+        return;
       }
 
-      // 2. Stage, commit and push
       try {
-        await runGitCmd('git add -A');
-        await runGitCmd(`git commit -m "${commitMsg}"`);
-        await runGitCmd('git push origin main');
-        console.log(`[Git Sync] Successfully synced upload to GitHub: ${file.isVault ? 'secure file' : file.originalName}`);
-
-        // Tell git to skip worktree tracking for this file and physically remove it
-        const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
         const relativePath = path.join(folderPath, fileNameOnDisk).replace(/\\/g, '/');
-        await runGitCmd(`git update-index --skip-worktree "${relativePath}"`);
-        const destFilePath = path.join(GIT_REPO_DIR, folderPath, fileNameOnDisk);
+        const fileBlob = await fs.openAsBlob(destFilePath);
+        
+        const formData = new FormData();
+        formData.append('path', relativePath);
+        formData.append('file', fileBlob, fileNameOnDisk);
+
+        const res = await fetch(`${STORAGE_SERVER_URL}/api/files`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          throw new Error(`Storage server returned status ${res.status}`);
+        }
+
+        console.log(`[Storage Sync] Upload successful: ${file.isVault ? 'secure file' : file.originalName}`);
+      } catch (err) {
+        console.error(`[Storage Sync] Failed to upload ${file.isVault ? 'secure file' : file.originalName}:`, err);
+      } finally {
+        pendingUploads.delete(file.id);
+        // Clean up local file after successful upload
         if (fs.existsSync(destFilePath)) {
           fs.unlinkSync(destFilePath);
-          console.log(`[Git Sync] Physically cleaned up local file after successful sync: ${file.isVault ? 'secure file' : file.originalName}`);
         }
-      } catch (err) {
-        console.error(`[Git Sync] Failed to commit/push upload: ${file.isVault ? 'secure file' : file.originalName}`, err);
       }
     });
   },
@@ -176,44 +163,24 @@ export const gitSync = {
     const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
     const fileNameOnDisk = file.isVault ? `${file.id}.enc` : file.originalName;
     const relativePath = path.join(folderPath, fileNameOnDisk).replace(/\\/g, '/');
-    const commitMsg = file.isVault ? "Delete secure file" : `Delete ${file.originalName}`;
-    enqueueGitTask(async () => {
-      console.log(`[Git Sync] Syncing deletion from GitHub: ${file.isVault ? 'secure file' : file.originalName}`);
-      const destFilePath = path.join(GIT_REPO_DIR, folderPath, fileNameOnDisk);
 
-      // 1. Pull latest to avoid push conflicts
+    enqueueTask(async () => {
+      console.log(`[Storage Sync] Deleting ${file.isVault ? 'secure file' : file.originalName} from storage server...`);
       try {
-        await runGitCmd('git pull --rebase origin main');
+        const res = await fetch(`${STORAGE_SERVER_URL}/api/files?path=${encodeURIComponent(relativePath)}`, {
+          method: 'DELETE'
+        });
+        if (!res.ok) {
+          throw new Error(`Storage server returned status ${res.status}`);
+        }
+        console.log(`[Storage Sync] Deletion successful: ${file.isVault ? 'secure file' : file.originalName}`);
       } catch (err) {
-        console.log('[Git Sync] Pull failed or branch not set up. Proceeding...');
-      }
-
-      // 2. Stop skipping worktree so Git registers the deletion
-      try {
-        await runGitCmd(`git update-index --no-skip-worktree "${relativePath}"`);
-      } catch (err) {
-        // Ignore if file wasn't skipped
-      }
-
-      // 3. Delete file if exists
-      if (fs.existsSync(destFilePath)) {
-        fs.unlinkSync(destFilePath);
-      }
-
-      // 4. Stage, commit and push
-      try {
-        await runGitCmd('git add -A');
-        await runGitCmd(`git commit -m "${commitMsg}"`);
-        await runGitCmd('git push origin main');
-        console.log(`[Git Sync] Successfully synced deletion from GitHub: ${file.isVault ? 'secure file' : file.originalName}`);
-      } catch (err) {
-        console.error(`[Git Sync] Failed to commit/push deletion: ${file.isVault ? 'secure file' : file.originalName}`, err);
+        console.error(`[Storage Sync] Failed to delete file: ${relativePath}`, err);
       }
     });
   },
 
   async ensureFileOnDisk(file) {
-    // Cancel any pending cleanup for this file since it's being accessed/streamed
     if (activeCleanups.has(file.id)) {
       clearTimeout(activeCleanups.get(file.id));
       activeCleanups.delete(file.id);
@@ -222,27 +189,45 @@ export const gitSync = {
     const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
     const fileNameOnDisk = file.isVault ? `${file.id}.enc` : file.originalName;
     const destFilePath = path.join(GIT_REPO_DIR, folderPath, fileNameOnDisk);
+
     if (fs.existsSync(destFilePath)) {
       return destFilePath;
     }
 
-    console.log(`[Git Sync] Checking out file on demand: ${file.isVault ? 'secure file' : file.originalName}`);
-    const relativePath = path.join(folderPath, fileNameOnDisk).replace(/\\/g, '/');
-
+    console.log(`[Storage Sync] Fetching file on demand: ${file.isVault ? 'secure file' : file.originalName}`);
     const destDir = path.dirname(destFilePath);
     if (!fs.existsSync(destDir)) {
       fs.mkdirSync(destDir, { recursive: true });
     }
 
-    try {
-      // Use ultra-fast git show redirection (takes ~150ms instead of ~400ms sequential checkout)
-      await runGitCmd(`git show HEAD:"${relativePath}" > "${destFilePath}"`);
-    } catch (err) {
-      // Fallback if git show fails
-      try {
-        await runGitCmd(`git update-index --no-skip-worktree "${relativePath}"`);
-      } catch (e) { }
-      await runGitCmd(`git checkout HEAD -- "${relativePath}"`);
+    const relativePath = path.join(folderPath, fileNameOnDisk).replace(/\\/g, '/');
+    const response = await fetch(`${STORAGE_SERVER_URL}/api/files?path=${encodeURIComponent(relativePath)}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch file ${relativePath} from storage server: ${response.statusText}`);
+    }
+
+    const fileStream = fs.createWriteStream(destFilePath);
+    await finished(Readable.fromWeb(response.body).pipe(fileStream));
+    return destFilePath;
+  },
+
+  async ensureVeraCryptFileOnDisk(username) {
+    const relativePath = `${username}/personal_vault.hc`;
+    const destFilePath = path.join(GIT_REPO_DIR, username, 'personal_vault.hc');
+    if (fs.existsSync(destFilePath)) {
+      return destFilePath;
+    }
+
+    console.log(`[Storage Sync] Fetching VeraCrypt container on demand: ${relativePath}`);
+    const destDir = path.dirname(destFilePath);
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+    }
+
+    const response = await fetch(`${STORAGE_SERVER_URL}/api/files?path=${encodeURIComponent(relativePath)}`);
+    if (response.ok) {
+      const fileStream = fs.createWriteStream(destFilePath);
+      await finished(Readable.fromWeb(response.body).pipe(fileStream));
     }
     return destFilePath;
   },
@@ -252,111 +237,111 @@ export const gitSync = {
     const fileNameOnDisk = file.isVault ? `${file.id}.enc` : file.originalName;
     const destFilePath = path.join(GIT_REPO_DIR, folderPath, fileNameOnDisk);
 
-    // Clear any existing timer to debounce
     if (activeCleanups.has(file.id)) {
       clearTimeout(activeCleanups.get(file.id));
     }
 
-    // Debounce/delay cleanup to avoid I/O thrashing during seekable range-request streaming
-    const timeoutId = setTimeout(async () => {
+    const timeoutId = setTimeout(() => {
       activeCleanups.delete(file.id);
+      if (pendingUploads.has(file.id)) {
+        console.log(`[Storage Sync] Skipping cleanup for ${file.id} because upload is pending`);
+        return;
+      }
       try {
         if (fs.existsSync(destFilePath)) {
-          const relativePath = path.join(folderPath, fileNameOnDisk).replace(/\\/g, '/');
-          await runGitCmd(`git update-index --skip-worktree "${relativePath}"`);
           fs.unlinkSync(destFilePath);
-          console.log(`[Git Sync] Cleaned up local file from disk (scheduled): ${file.isVault ? 'secure file' : file.originalName}`);
+          console.log(`[Storage Sync] Cleaned up local file from disk (scheduled): ${file.isVault ? 'secure file' : file.originalName}`);
         }
       } catch (err) {
-        console.error(`[Git Sync] Failed to clean up file ${file.isVault ? 'secure file' : file.originalName}:`, err.message);
+        console.error(`[Storage Sync] Failed to clean up file ${file.isVault ? 'secure file' : file.originalName}:`, err.message);
       }
-    }, 1000); // 1 second debounce delay
+    }, 1000);
 
     activeCleanups.set(file.id, timeoutId);
   },
 
   queueDbSync() {
-    enqueueGitTask(async () => {
-      console.log('[Git Sync] Syncing database to GitHub...');
-      const srcPath = path.join(DATA_DIR, 'db.json');
-      const destPath = path.join(GIT_REPO_DIR, 'db.json');
-      
-      if (fs.existsSync(srcPath)) {
-        fs.copyFileSync(srcPath, destPath);
-      }
-
-      try {
-        await runGitCmd('git pull --rebase origin main').catch(() => {});
-        
-        if (fs.existsSync(srcPath)) {
-          fs.copyFileSync(srcPath, destPath);
+    enqueueTask(async () => {
+      console.log('[Storage Sync] Syncing database to storage server...');
+      const localDbPath = path.join(DATA_DIR, 'db.json');
+      if (fs.existsSync(localDbPath)) {
+        try {
+          const localDb = JSON.parse(fs.readFileSync(localDbPath, 'utf8'));
+          const res = await fetch(`${STORAGE_SERVER_URL}/api/db`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(localDb)
+          });
+          if (!res.ok) {
+            throw new Error(`Storage server returned status ${res.status}`);
+          }
+          console.log('[Storage Sync] Database state successfully synced to storage server.');
+        } catch (err) {
+          console.error('[Storage Sync] Failed to sync database to storage server:', err);
         }
-
-        await runGitCmd('git add db.json');
-        await runGitCmd('git commit -m "Sync database state"');
-        await runGitCmd('git push origin main');
-        console.log('[Git Sync] Database state successfully synced to GitHub.');
-      } catch (err) {
-        console.error('[Git Sync] Failed to sync database to GitHub:', err);
       }
     });
   },
 
   syncVeraCryptFile(username) {
     const relativePath = path.join(username, 'personal_vault.hc').replace(/\\/g, '/');
-    enqueueGitTask(async () => {
-      console.log(`[Git Sync] Syncing VeraCrypt container for ${username} to GitHub...`);
+    const localPath = path.join(GIT_REPO_DIR, username, 'personal_vault.hc');
+    enqueueTask(async () => {
+      console.log(`[Storage Sync] Syncing VeraCrypt container for ${username} to storage server...`);
       try {
-        await runGitCmd('git pull --rebase origin main').catch(() => {});
-        await runGitCmd(`git add "${relativePath}"`);
-        await runGitCmd(`git commit -m "Update VeraCrypt vault for ${username}"`);
-        await runGitCmd('git push origin main');
-        console.log(`[Git Sync] Successfully synced VeraCrypt container for ${username}`);
+        if (!fs.existsSync(localPath)) {
+          console.error(`[Storage Sync] Local VeraCrypt file not found at ${localPath}`);
+          return;
+        }
+        const fileBlob = await fs.openAsBlob(localPath);
+        const formData = new FormData();
+        formData.append('path', relativePath);
+        formData.append('file', fileBlob, 'personal_vault.hc');
+
+        const res = await fetch(`${STORAGE_SERVER_URL}/api/files`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          throw new Error(`Storage server returned status ${res.status}`);
+        }
+        console.log(`[Storage Sync] VeraCrypt container sync successful for ${username}`);
       } catch (err) {
-        console.error(`[Git Sync] Failed to sync VeraCrypt container for ${username}`, err);
+        console.error(`[Storage Sync] Failed to sync VeraCrypt container for ${username}:`, err);
       }
     });
   },
 
   queueRenameFile(file, oldName, newName) {
-    enqueueGitTask(async () => {
-      console.log(`[Git Sync] Syncing file rename: ${oldName} -> ${newName}`);
-      if (file.isVault) return; // Encrpyted files use IDs and do not change names in git
+    enqueueTask(async () => {
+      console.log(`[Storage Sync] Syncing file rename: ${oldName} -> ${newName}`);
+      if (file.isVault) return;
 
       const folderPath = getFolderHierarchyPath(file.folderId, file.ownerUsername);
       const oldRelative = path.join(folderPath, oldName).replace(/\\/g, '/');
       const newRelative = path.join(folderPath, newName).replace(/\\/g, '/');
 
       try {
-        await runGitCmd('git pull --rebase origin main').catch(() => {});
-        await gitSync.ensureFileOnDisk(file);
-
-        try {
-          await runGitCmd(`git update-index --no-skip-worktree "${oldRelative}"`);
-        } catch (e) {}
-
-        fs.mkdirSync(path.join(GIT_REPO_DIR, folderPath), { recursive: true });
-
-        await runGitCmd(`git mv "${oldRelative}" "${newRelative}"`);
-        await runGitCmd(`git commit -m "Rename ${oldName} to ${newName}"`);
-        await runGitCmd('git push origin main');
-
-        await runGitCmd(`git update-index --skip-worktree "${newRelative}"`);
-        const physicalPath = path.join(GIT_REPO_DIR, newRelative);
-        if (fs.existsSync(physicalPath)) {
-          fs.unlinkSync(physicalPath);
+        const res = await fetch(`${STORAGE_SERVER_URL}/api/files/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ oldPath: oldRelative, newPath: newRelative })
+        });
+        if (!res.ok) {
+          throw new Error(`Storage server returned status ${res.status}`);
         }
-        console.log(`[Git Sync] File rename synced: ${oldName} -> ${newName}`);
+        console.log(`[Storage Sync] File rename synced: ${oldName} -> ${newName}`);
       } catch (err) {
-        console.error(`[Git Sync] Failed to rename file ${oldName}:`, err);
+        console.error(`[Storage Sync] Failed to rename file ${oldName}:`, err);
       }
     });
   },
 
   queueMoveFile(file, oldFolderId, newFolderId) {
-    enqueueGitTask(async () => {
+    enqueueTask(async () => {
       const fileName = file.isVault ? `${file.id}.enc` : file.originalName;
-      console.log(`[Git Sync] Syncing file move: ${fileName}`);
+      console.log(`[Storage Sync] Syncing file move: ${fileName}`);
       const oldFolder = getFolderHierarchyPath(oldFolderId, file.ownerUsername);
       const newFolder = getFolderHierarchyPath(newFolderId, file.ownerUsername);
       if (oldFolder === newFolder) return;
@@ -365,34 +350,24 @@ export const gitSync = {
       const newRelative = path.join(newFolder, fileName).replace(/\\/g, '/');
 
       try {
-        await runGitCmd('git pull --rebase origin main').catch(() => {});
-        await gitSync.ensureFileOnDisk(file);
-
-        try {
-          await runGitCmd(`git update-index --no-skip-worktree "${oldRelative}"`);
-        } catch (e) {}
-
-        fs.mkdirSync(path.join(GIT_REPO_DIR, newFolder), { recursive: true });
-
-        await runGitCmd(`git mv "${oldRelative}" "${newRelative}"`);
-        await runGitCmd(`git commit -m "Move ${fileName} in folder tree"`);
-        await runGitCmd('git push origin main');
-
-        await runGitCmd(`git update-index --skip-worktree "${newRelative}"`);
-        const physicalPath = path.join(GIT_REPO_DIR, newRelative);
-        if (fs.existsSync(physicalPath)) {
-          fs.unlinkSync(physicalPath);
+        const res = await fetch(`${STORAGE_SERVER_URL}/api/files/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ oldPath: oldRelative, newPath: newRelative })
+        });
+        if (!res.ok) {
+          throw new Error(`Storage server returned status ${res.status}`);
         }
-        console.log(`[Git Sync] File move synced: ${fileName}`);
+        console.log(`[Storage Sync] File move synced: ${fileName}`);
       } catch (err) {
-        console.error(`[Git Sync] Failed to move file ${fileName}:`, err);
+        console.error(`[Storage Sync] Failed to move file ${fileName}:`, err);
       }
     });
   },
 
   queueRenameFolder(folderId, oldName, newName, ownerUsername) {
-    enqueueGitTask(async () => {
-      console.log(`[Git Sync] Syncing folder rename: ${oldName} -> ${newName}`);
+    enqueueTask(async () => {
+      console.log(`[Storage Sync] Syncing folder rename: ${oldName} -> ${newName}`);
       const oldRelative = getFolderHierarchyPath(folderId, ownerUsername);
       const pathParts = oldRelative.split('/');
       pathParts[pathParts.length - 1] = newName.replace(/[\/\\:\*\?"<>\|]/g, '_');
@@ -401,53 +376,23 @@ export const gitSync = {
       if (oldRelative === newRelative) return;
 
       try {
-        await runGitCmd('git pull --rebase origin main').catch(() => {});
-        const files = getAllFilesInFolder(folderId);
-
-        if (files.length === 0) {
-          const oldPhysical = path.join(GIT_REPO_DIR, oldRelative);
-          const newPhysical = path.join(GIT_REPO_DIR, newRelative);
-          if (fs.existsSync(oldPhysical)) {
-            fs.mkdirSync(path.dirname(newPhysical), { recursive: true });
-            fs.renameSync(oldPhysical, newPhysical);
-          }
-          console.log(`[Git Sync] Folder rename synced (empty folder): ${oldName} -> ${newName}`);
-          return;
+        const res = await fetch(`${STORAGE_SERVER_URL}/api/files/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ oldPath: oldRelative, newPath: newRelative })
+        });
+        if (!res.ok) {
+          throw new Error(`Storage server returned status ${res.status}`);
         }
-
-        // Checkout and un-skip all files
-        for (const file of files) {
-          await gitSync.ensureFileOnDisk(file);
-          const fileName = file.isVault ? `${file.id}.enc` : file.originalName;
-          const oldFileRel = path.join(getFolderHierarchyPath(file.folderId, file.ownerUsername), fileName).replace(/\\/g, '/');
-          try {
-            await runGitCmd(`git update-index --no-skip-worktree "${oldFileRel}"`);
-          } catch (e) {}
-        }
-
-        await runGitCmd(`git mv "${oldRelative}" "${newRelative}"`);
-        await runGitCmd(`git commit -m "Rename folder ${oldName} to ${newName}"`);
-        await runGitCmd('git push origin main');
-
-        // Re-apply skip-worktree
-        for (const file of files) {
-          const fileName = file.isVault ? `${file.id}.enc` : file.originalName;
-          const newFileRel = path.join(getFolderHierarchyPath(file.folderId, file.ownerUsername), fileName).replace(/\\/g, '/');
-          await runGitCmd(`git update-index --skip-worktree "${newFileRel}"`);
-          const physicalPath = path.join(GIT_REPO_DIR, newFileRel);
-          if (fs.existsSync(physicalPath)) {
-            fs.unlinkSync(physicalPath);
-          }
-        }
-        console.log(`[Git Sync] Folder rename synced: ${oldName} -> ${newName}`);
+        console.log(`[Storage Sync] Folder rename synced: ${oldName} -> ${newName}`);
       } catch (err) {
-        console.error(`[Git Sync] Failed to rename folder ${oldName}:`, err);
+        console.error(`[Storage Sync] Failed to rename folder ${oldName}:`, err);
       }
     });
   },
 
   queueMoveFolder(folderId, oldParentId, newParentId, ownerUsername) {
-    enqueueGitTask(async () => {
+    enqueueTask(async () => {
       const folders = db.getFolders();
       const folder = folders.find(f => f.id === folderId);
       if (!folder) return;
@@ -464,185 +409,61 @@ export const gitSync = {
 
       if (oldRelative === newRelative) return;
 
-      console.log(`[Git Sync] Syncing folder move: ${oldRelative} -> ${newRelative}`);
+      console.log(`[Storage Sync] Syncing folder move: ${oldRelative} -> ${newRelative}`);
 
       try {
-        await runGitCmd('git pull --rebase origin main').catch(() => {});
-        const files = getAllFilesInFolder(folderId);
-
-        if (files.length === 0) {
-          const oldPhysical = path.join(GIT_REPO_DIR, oldRelative);
-          const newPhysical = path.join(GIT_REPO_DIR, newRelative);
-          if (fs.existsSync(oldPhysical)) {
-            fs.mkdirSync(path.dirname(newPhysical), { recursive: true });
-            fs.renameSync(oldPhysical, newPhysical);
-          }
-          console.log(`[Git Sync] Folder move synced (empty folder): ${oldRelative} -> ${newRelative}`);
-          return;
+        const res = await fetch(`${STORAGE_SERVER_URL}/api/files/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ oldPath: oldRelative, newPath: newRelative })
+        });
+        if (!res.ok) {
+          throw new Error(`Storage server returned status ${res.status}`);
         }
-
-        // Checkout and un-skip all files
-        for (const file of files) {
-          const origFolderParentMap = new Map();
-          const walkFolder = folders.find(f => f.id === folderId);
-          if (walkFolder) {
-            origFolderParentMap.set(walkFolder.id, walkFolder.parentId);
-            walkFolder.parentId = oldParentId;
-          }
-          
-          await gitSync.ensureFileOnDisk(file);
-          const fileName = file.isVault ? `${file.id}.enc` : file.originalName;
-          const oldFileRel = path.join(getFolderHierarchyPath(file.folderId, file.ownerUsername), fileName).replace(/\\/g, '/');
-          
-          if (walkFolder) {
-            walkFolder.parentId = origFolderParentMap.get(walkFolder.id);
-          }
-
-          try {
-            await runGitCmd(`git update-index --no-skip-worktree "${oldFileRel}"`);
-          } catch (e) {}
-        }
-
-        fs.mkdirSync(path.dirname(path.join(GIT_REPO_DIR, newRelative)), { recursive: true });
-        await runGitCmd(`git mv "${oldRelative}" "${newRelative}"`);
-        await runGitCmd(`git commit -m "Move folder ${folder.name}"`);
-        await runGitCmd('git push origin main');
-
-        // Re-apply skip-worktree
-        for (const file of files) {
-          const fileName = file.isVault ? `${file.id}.enc` : file.originalName;
-          const newFileRel = path.join(getFolderHierarchyPath(file.folderId, file.ownerUsername), fileName).replace(/\\/g, '/');
-          await runGitCmd(`git update-index --skip-worktree "${newFileRel}"`);
-          const physicalPath = path.join(GIT_REPO_DIR, newFileRel);
-          if (fs.existsSync(physicalPath)) {
-            fs.unlinkSync(physicalPath);
-          }
-        }
-        console.log(`[Git Sync] Folder move synced: ${oldRelative} -> ${newRelative}`);
+        console.log(`[Storage Sync] Folder move synced: ${oldRelative} -> ${newRelative}`);
       } catch (err) {
-        console.error(`[Git Sync] Failed to move folder:`, err);
+        console.error(`[Storage Sync] Failed to move folder:`, err);
       }
     });
+  },
+
+  async waitTaskQueueEmpty() {
+    while (taskQueue.length > 0 || taskProcessing) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
   }
 };
-
-// Recursive helper to get all files in a folder tree
-function getAllFilesInFolder(folderId) {
-  const allFiles = db.getFiles();
-  const allFolders = db.getFolders();
-  const files = [];
-  
-  function recurse(fId) {
-    files.push(...allFiles.filter(f => f.folderId === fId));
-    allFolders.filter(f => f.parentId === fId).forEach(sub => recurse(sub.id));
-  }
-  
-  recurse(folderId);
-  return files;
-}
-
-// Custom DB Merging in case of Git merge conflicts
-function mergeJsonDbs(local, remote) {
-  const merged = {
-    files: [],
-    folders: [],
-    users: [],
-    g00jKeys: [],
-    scraperJobs: []
-  };
-
-  function mergeList(listA, listB, key = 'id') {
-    const map = new Map();
-    listA.forEach(item => map.set(item[key], item));
-    listB.forEach(item => {
-      const existing = map.get(item[key]);
-      if (existing) {
-        map.set(item[key], { ...existing, ...item });
-      } else {
-        map.set(item[key], item);
-      }
-    });
-    return Array.from(map.values());
-  }
-
-  merged.files = mergeList(local.files || [], remote.files || [], 'id');
-  merged.folders = mergeList(local.folders || [], remote.folders || [], 'id');
-  merged.users = mergeList(local.users || [], remote.users || [], 'id');
-  merged.g00jKeys = mergeList(local.g00jKeys || [], remote.g00jKeys || [], 'key');
-  merged.scraperJobs = mergeList(local.scraperJobs || [], remote.scraperJobs || [], 'id');
-
-  return merged;
-}
 
 let syncIntervalId = null;
 let isSyncingInProgress = false;
 
-// Runs background sync loop
 async function runBackgroundSync() {
   if (isSyncingInProgress) return;
   isSyncingInProgress = true;
-  console.log('[Git Sync] Running background synchronization...');
+  console.log('[Storage Sync] Running background synchronization...');
 
   try {
-    if (!fs.existsSync(GIT_REPO_DIR) || !fs.existsSync(path.join(GIT_REPO_DIR, '.git'))) {
-      await gitSync.initGitRepo();
-    }
-
-    await runGitCmd('git fetch origin main');
-    
-    const { stdout: localRev } = await runGitCmd('git rev-parse HEAD');
-    const { stdout: remoteRev } = await runGitCmd('git rev-parse origin/main');
-
-    if (localRev.trim() !== remoteRev.trim()) {
-      console.log('[Git Sync] Remote changes detected. Synchronizing...');
-      
-      try {
-        await runGitCmd('git pull --rebase origin main');
-        
-        const repoDbPath = path.join(GIT_REPO_DIR, 'db.json');
-        const localDbPath = path.join(DATA_DIR, 'db.json');
-        if (fs.existsSync(repoDbPath)) {
-          fs.copyFileSync(repoDbPath, localDbPath);
-          console.log('[Git Sync] Local database updated from remote changes.');
-          if (global.onDbSyncedFromRemote) {
-            global.onDbSyncedFromRemote();
-          }
-        }
-      } catch (pullErr) {
-        console.error('[Git Sync] Pull conflict detected. Executing programmatic resolution...');
-        await runGitCmd('git rebase --abort').catch(() => {});
-        await runGitCmd('git merge --abort').catch(() => {});
-        
-        const localDbPath = path.join(DATA_DIR, 'db.json');
-        let remoteDbContent = '{}';
+    const res = await fetch(`${STORAGE_SERVER_URL}/api/db`);
+    if (res.ok) {
+      const remoteDb = await res.json();
+      const localDbPath = path.join(DATA_DIR, 'db.json');
+      let localDb = { files: [], folders: [], scraperJobs: [], users: [], g00jKeys: [] };
+      if (fs.existsSync(localDbPath)) {
         try {
-          const { stdout } = await runGitCmd('git show origin/main:db.json');
-          remoteDbContent = stdout;
+          localDb = JSON.parse(fs.readFileSync(localDbPath, 'utf8'));
         } catch (e) {}
+      }
 
-        if (remoteDbContent && fs.existsSync(localDbPath)) {
-          const localDb = JSON.parse(fs.readFileSync(localDbPath, 'utf8'));
-          const remoteDb = JSON.parse(remoteDbContent);
-          const mergedDb = mergeJsonDbs(localDb, remoteDb);
-          
-          fs.writeFileSync(localDbPath, JSON.stringify(mergedDb, null, 2), 'utf8');
-          fs.writeFileSync(path.join(GIT_REPO_DIR, 'db.json'), JSON.stringify(mergedDb, null, 2), 'utf8');
-          
-          await runGitCmd('git add db.json');
-          await runGitCmd('git commit -m "Resolve database sync merge"');
-          await runGitCmd('git push origin main');
-          
-          console.log('[Git Sync] Programmatic merge completed successfully.');
-          if (global.onDbSyncedFromRemote) {
-            global.onDbSyncedFromRemote();
-          }
+      if (JSON.stringify(remoteDb) !== JSON.stringify(localDb)) {
+        console.log('[Storage Sync] Remote database changes detected. Overwriting local copy...');
+        fs.writeFileSync(localDbPath, JSON.stringify(remoteDb, null, 2), 'utf8');
+        if (global.onDbSyncedFromRemote) {
+          global.onDbSyncedFromRemote();
         }
       }
-    } else {
-      console.log('[Git Sync] Sync status: OK');
     }
   } catch (err) {
-    console.error('[Git Sync] Background sync error:', err.message);
+    console.error('[Storage Sync] Background sync error:', err.message);
   } finally {
     isSyncingInProgress = false;
   }
@@ -652,14 +473,13 @@ export function startSyncLoop(intervalMs = 30000) {
   if (syncIntervalId) return;
   setTimeout(runBackgroundSync, 2000);
   syncIntervalId = setInterval(runBackgroundSync, intervalMs);
-  console.log(`[Git Sync] Polling sync loop started every ${intervalMs / 1000}s`);
+  console.log(`[Storage Sync] Polling sync loop started every ${intervalMs / 1000}s`);
 }
 
 export function stopSyncLoop() {
   if (syncIntervalId) {
     clearInterval(syncIntervalId);
     syncIntervalId = null;
-    console.log('[Git Sync] Polling sync loop stopped');
+    console.log('[Storage Sync] Polling sync loop stopped');
   }
 }
-

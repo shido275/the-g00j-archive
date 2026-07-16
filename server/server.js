@@ -346,6 +346,9 @@ app.post('/api/vault/change-password', authenticateToken, async (req, res) => {
     // 3. Re-encrypt all vault files owned by this user
     const userFiles = db.getFiles().filter(f => f.ownerUsername === username && f.isVault);
     
+    // Drain any pending upload tasks to prevent file clashes
+    await gitSync.waitTaskQueueEmpty();
+    
     console.log(`[Vault Key Rotation] Re-encrypting ${userFiles.length} files for user ${username}...`);
     
     for (const file of userFiles) {
@@ -1262,7 +1265,7 @@ app.get('/api/files/download/:id', async (req, res) => {
   try {
     if (req.params.id.startsWith('veracrypt-vault-')) {
       const username = req.params.id.replace('veracrypt-vault-', '');
-      const filePath = path.join(GIT_REPO_DIR, username, 'personal_vault.hc');
+      const filePath = await gitSync.ensureVeraCryptFileOnDisk(username);
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ error: 'Vault file not found' });
       }
