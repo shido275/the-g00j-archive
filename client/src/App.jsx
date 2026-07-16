@@ -37,6 +37,7 @@ import {
   Radio,
   Share2,
   Copy,
+  FolderInput,
   Sliders,
   Crop,
   Type,
@@ -60,6 +61,7 @@ const originalFetch = window.fetch;
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
+  const [syncStatus, setSyncStatus] = useState('synced');
   const [currentUser, setCurrentUser] = useState(null);
   const [usersList, setUsersList] = useState([]);
   const [adminViewTab, setAdminViewTab] = useState('users');
@@ -2556,6 +2558,153 @@ function App() {
     setUploads(prev => prev.filter(u => u.status !== 'completed' && u.status !== 'error'));
   };
 
+  // SSE Sync Events Listener
+  useEffect(() => {
+    if (!token) return;
+
+    console.log('[Sync] Connecting to SSE sync events stream...');
+    setSyncStatus('synced');
+    const eventSource = new EventSource(`${API_BASE}/api/sync/events`);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'database_updated') {
+          console.log('[Sync] Remote changes detected via SSE. Reloading...');
+          setSyncStatus('syncing');
+          fetchFiles();
+          fetchFolders();
+          setTimeout(() => setSyncStatus('synced'), 1000);
+        }
+      } catch (err) {
+        console.error('[Sync] Error parsing SSE message:', err);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error('[Sync] SSE connection error:', err);
+      setSyncStatus('error');
+    };
+
+    return () => {
+      console.log('[Sync] Closing SSE sync events stream...');
+      eventSource.close();
+    };
+  }, [token]);
+
+  const handleRenameFile = async (e, file) => {
+    e.stopPropagation();
+    const newName = window.prompt('Enter new name for the file:', file.originalName);
+    if (newName && newName !== file.originalName) {
+      try {
+        const response = await fetch(`${API_BASE}/api/files/${file.id}/rename`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newName })
+        });
+        if (response.ok) {
+          fetchFiles();
+        } else {
+          const data = await response.json();
+          alert(data.error || 'Failed to rename file');
+        }
+      } catch (err) {
+        console.error('Error renaming file:', err);
+      }
+    }
+  };
+
+  const handleMoveFile = async (e, file) => {
+    e.stopPropagation();
+    const folderChoices = folders.map(f => f.name).join(', ');
+    const choice = window.prompt(`Enter target folder name (type 'root' for root, or select from: ${folderChoices}):`);
+    if (choice === null) return;
+    
+    let targetFolderId = null;
+    if (choice.trim().toLowerCase() !== 'root') {
+      const match = folders.find(f => f.name.toLowerCase() === choice.trim().toLowerCase());
+      if (!match) {
+        alert('Folder not found!');
+        return;
+      }
+      targetFolderId = match.id;
+    }
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/files/${file.id}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderId: targetFolderId })
+      });
+      if (response.ok) {
+        fetchFiles();
+      } else {
+        const data = await response.json();
+        alert(data.error || 'Failed to move file');
+      }
+    } catch (err) {
+      console.error('Error moving file:', err);
+    }
+  };
+
+  const handleRenameFolder = async (e, folderId, currentName) => {
+    e.stopPropagation();
+    const newName = window.prompt('Enter new name for the folder:', currentName);
+    if (newName && newName !== currentName) {
+      try {
+        const response = await fetch(`${API_BASE}/api/folders/${folderId}/rename`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newName })
+        });
+        if (response.ok) {
+          fetchFolders();
+          fetchFiles();
+        } else {
+          const data = await response.json();
+          alert(data.error || 'Failed to rename folder');
+        }
+      } catch (err) {
+        console.error('Error renaming folder:', err);
+      }
+    }
+  };
+
+  const handleMoveFolder = async (e, folderId, folderName) => {
+    e.stopPropagation();
+    const otherFolders = folders.filter(f => f.id !== folderId);
+    const folderChoices = otherFolders.map(f => f.name).join(', ');
+    const choice = window.prompt(`Enter target parent folder name (type 'root' for root, or select from: ${folderChoices}):`);
+    if (choice === null) return;
+
+    let targetParentId = null;
+    if (choice.trim().toLowerCase() !== 'root') {
+      const match = otherFolders.find(f => f.name.toLowerCase() === choice.trim().toLowerCase());
+      if (!match) {
+        alert('Folder not found!');
+        return;
+      }
+      targetParentId = match.id;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/api/folders/${folderId}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentId: targetParentId })
+      });
+      if (response.ok) {
+        fetchFolders();
+        fetchFiles();
+      } else {
+        const data = await response.json();
+        alert(data.error || 'Failed to move folder');
+      }
+    } catch (err) {
+      console.error('Error moving folder:', err);
+    }
+  };
+
   // Action handlers on files
   const handleDelete = async (e, id) => {
     e.stopPropagation();
@@ -3069,6 +3218,10 @@ function App() {
           </div>
 
           <div className="user-profile-sidebar" style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)', padding: '16px 8px 0 8px', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px', borderRadius: '6px', background: 'rgba(255,255,255,0.02)', fontSize: '0.75rem', color: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#10b981', border: '1px solid rgba(255,255,255,0.03)', marginBottom: '4px' }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', display: 'inline-block', background: syncStatus === 'error' ? '#ef4444' : syncStatus === 'syncing' ? '#fbbf24' : '#10b981', boxShadow: syncStatus === 'syncing' ? '0 0 8px #fbbf24' : syncStatus === 'error' ? '0 0 8px #ef4444' : '0 0 8px #10b981' }}></span>
+              <span style={{ fontWeight: 500 }}>{syncStatus === 'error' ? 'Sync Connection Error' : syncStatus === 'syncing' ? 'Syncing...' : 'GitHub Synced'}</span>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <div className="avatar-placeholder" style={{ background: 'var(--accent-indigo)', color: '#fff', borderRadius: '50%', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold' }}>
                 {(currentUser?.displayName || currentUser?.username)?.charAt(0).toUpperCase()}
@@ -3738,14 +3891,32 @@ function App() {
                     {!sharedFolderRootId ? (
                       <>
                         {!folder.isVault && (
-                          <button
-                            className="file-action-btn"
-                            onClick={(e) => openShareModal(e, folder, 'folder')}
-                            title="Share Folder"
-                            style={{ color: 'var(--accent-indigo)', marginRight: '8px' }}
-                          >
-                            <Share2 size={14} />
-                          </button>
+                          <>
+                            <button
+                              className="file-action-btn"
+                              onClick={(e) => handleRenameFolder(e, folder.id, folder.name)}
+                              title="Rename Folder"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              <Edit3 size={14} />
+                            </button>
+                            <button
+                              className="file-action-btn"
+                              onClick={(e) => handleMoveFolder(e, folder.id, folder.name)}
+                              title="Move Folder"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              <FolderInput size={14} />
+                            </button>
+                            <button
+                              className="file-action-btn"
+                              onClick={(e) => openShareModal(e, folder, 'folder')}
+                              title="Share Folder"
+                              style={{ color: 'var(--accent-indigo)' }}
+                            >
+                              <Share2 size={14} />
+                            </button>
+                          </>
                         )}
                         <button
                           className="file-action-btn btn-delete"
@@ -3838,14 +4009,32 @@ function App() {
                     {!sharedFolderRootId && (
                       <>
                         {!file.isVault && (
-                          <button
-                            className="file-action-btn"
-                            onClick={(e) => openShareModal(e, file)}
-                            title="Share File"
-                            style={{ color: 'var(--accent-indigo)' }}
-                          >
-                            <Share2 size={14} />
-                          </button>
+                          <>
+                            <button
+                              className="file-action-btn"
+                              onClick={(e) => handleRenameFile(e, file)}
+                              title="Rename File"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              <Edit3 size={14} />
+                            </button>
+                            <button
+                              className="file-action-btn"
+                              onClick={(e) => handleMoveFile(e, file)}
+                              title="Move File"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              <FolderInput size={14} />
+                            </button>
+                            <button
+                              className="file-action-btn"
+                              onClick={(e) => openShareModal(e, file)}
+                              title="Share File"
+                              style={{ color: 'var(--accent-indigo)' }}
+                            >
+                              <Share2 size={14} />
+                            </button>
+                          </>
                         )}
                         <button
                           className="file-action-btn btn-delete"
@@ -3960,14 +4149,32 @@ function App() {
                           {!sharedFolderRootId ? (
                             <>
                               {!folder.isVault && (
-                                <button
-                                  className="file-action-btn"
-                                  onClick={(e) => openShareModal(e, folder, 'folder')}
-                                  title="Share Folder"
-                                  style={{ color: 'var(--accent-indigo)', marginRight: '8px' }}
-                                >
-                                  <Share2 size={14} />
-                                </button>
+                                <>
+                                  <button
+                                    className="file-action-btn"
+                                    onClick={(e) => handleRenameFolder(e, folder.id, folder.name)}
+                                    title="Rename Folder"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                  >
+                                    <Edit3 size={14} />
+                                  </button>
+                                  <button
+                                    className="file-action-btn"
+                                    onClick={(e) => handleMoveFolder(e, folder.id, folder.name)}
+                                    title="Move Folder"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                  >
+                                    <FolderInput size={14} />
+                                  </button>
+                                  <button
+                                    className="file-action-btn"
+                                    onClick={(e) => openShareModal(e, folder, 'folder')}
+                                    title="Share Folder"
+                                    style={{ color: 'var(--accent-indigo)' }}
+                                  >
+                                    <Share2 size={14} />
+                                  </button>
+                                </>
                               )}
                               <button
                                 className="file-action-btn btn-delete"
@@ -4051,14 +4258,32 @@ function App() {
                           {!sharedFolderRootId && (
                             <>
                               {!file.isVault && (
-                                <button
-                                  className="file-action-btn"
-                                  onClick={(e) => openShareModal(e, file)}
-                                  title="Share File"
-                                  style={{ color: 'var(--accent-indigo)' }}
-                                >
-                                  <Share2 size={14} />
-                                </button>
+                                <>
+                                  <button
+                                    className="file-action-btn"
+                                    onClick={(e) => handleRenameFile(e, file)}
+                                    title="Rename File"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                  >
+                                    <Edit3 size={14} />
+                                  </button>
+                                  <button
+                                    className="file-action-btn"
+                                    onClick={(e) => handleMoveFile(e, file)}
+                                    title="Move File"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                  >
+                                    <FolderInput size={14} />
+                                  </button>
+                                  <button
+                                    className="file-action-btn"
+                                    onClick={(e) => openShareModal(e, file)}
+                                    title="Share File"
+                                    style={{ color: 'var(--accent-indigo)' }}
+                                  >
+                                    <Share2 size={14} />
+                                  </button>
+                                </>
                               )}
                               <button
                                 className="file-action-btn btn-delete"

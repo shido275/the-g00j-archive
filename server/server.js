@@ -11,9 +11,31 @@ import * as mm from 'music-metadata';
 import AdmZip from 'adm-zip';
 import crypto from 'crypto';
 import { db } from './db.js';
-import { gitSync, getFolderHierarchyPath } from './gitSync.js';
+import { gitSync, getFolderHierarchyPath, startSyncLoop, stopSyncLoop } from './gitSync.js';
 import { Transform } from 'stream';
-global.triggerDbSync = () => gitSync.queueDbSync();
+
+const sseClients = new Set();
+
+function notifySseClients(eventData) {
+  const message = `data: ${JSON.stringify(eventData)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(message);
+    } catch (e) {
+      sseClients.delete(client);
+    }
+  }
+}
+
+global.onDbSyncedFromRemote = () => {
+  console.log('[SSE] Database synchronized from GitHub. Notifying clients...');
+  notifySseClients({ type: 'database_updated' });
+};
+
+global.triggerDbSync = () => {
+  gitSync.queueDbSync();
+  notifySseClients({ type: 'database_updated' });
+};
 
 // --- Vault Cryptographic Helpers ---
 function encryptText(text, key) {
@@ -2548,10 +2570,163 @@ app.post('/api/files/:id/edit', async (req, res) => {
   }
 });
 
+// SSE endpoint to listen to database update events
+app.get('/api/sync/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  sseClients.add(res);
+  console.log(`[SSE] Client connected. Active clients: ${sseClients.size}`);
+
+  req.on('close', () => {
+    sseClients.delete(res);
+    console.log(`[SSE] Client disconnected. Active clients: ${sseClients.size}`);
+  });
+});
+
+// Rename file
+app.post('/api/files/:id/rename', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newName } = req.body;
+    if (!newName) return res.status(400).json({ error: 'Missing newName' });
+
+    const file = db.getFile(id);
+    if (!file) return res.status(404).json({ error: 'File not found' });
+    if (file.ownerUsername !== req.user.username && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized to rename this file' });
+    }
+
+    const oldName = file.originalName;
+    if (oldName === newName) {
+      return res.json({ success: true, file });
+    }
+
+    gitSync.queueRenameFile(file, oldName, newName);
+
+    file.originalName = newName;
+    db.saveFile(file);
+
+    res.json({ success: true, file });
+  } catch (error) {
+    console.error('Rename file error:', error);
+    res.status(500).json({ error: `Failed to rename file: ${error.message}` });
+  }
+});
+
+// Move file
+app.post('/api/files/:id/move', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { folderId } = req.body;
+
+    const file = db.getFile(id);
+    if (!file) return res.status(404).json({ error: 'File not found' });
+    if (file.ownerUsername !== req.user.username && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized to move this file' });
+    }
+
+    const oldFolderId = file.folderId;
+    const targetFolderId = folderId === 'root' || !folderId ? null : folderId;
+
+    if (oldFolderId === targetFolderId) {
+      return res.json({ success: true, file });
+    }
+
+    gitSync.queueMoveFile(file, oldFolderId, targetFolderId);
+
+    file.folderId = targetFolderId;
+    db.saveFile(file);
+
+    res.json({ success: true, file });
+  } catch (error) {
+    console.error('Move file error:', error);
+    res.status(500).json({ error: `Failed to move file: ${error.message}` });
+  }
+});
+
+// Rename folder
+app.post('/api/folders/:id/rename', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newName } = req.body;
+    if (!newName) return res.status(400).json({ error: 'Missing newName' });
+
+    const folder = db.getFolder(id);
+    if (!folder) return res.status(404).json({ error: 'Folder not found' });
+    if (folder.ownerUsername !== req.user.username && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized to rename this folder' });
+    }
+
+    const oldName = folder.name;
+    if (oldName === newName) {
+      return res.json({ success: true, folder });
+    }
+
+    gitSync.queueRenameFolder(id, oldName, newName, folder.ownerUsername);
+
+    folder.name = newName;
+    db.saveFolder(folder);
+
+    res.json({ success: true, folder });
+  } catch (error) {
+    console.error('Rename folder error:', error);
+    res.status(500).json({ error: `Failed to rename folder: ${error.message}` });
+  }
+});
+
+// Move folder
+app.post('/api/folders/:id/move', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { parentId } = req.body;
+
+    const folder = db.getFolder(id);
+    if (!folder) return res.status(404).json({ error: 'Folder not found' });
+    if (folder.ownerUsername !== req.user.username && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized to move this folder' });
+    }
+
+    const oldParentId = folder.parentId;
+    const targetParentId = parentId === 'root' || !parentId ? null : parentId;
+
+    if (oldParentId === targetParentId) {
+      return res.json({ success: true, folder });
+    }
+
+    if (targetParentId === id) {
+      return res.status(400).json({ error: 'Cannot move a folder inside itself' });
+    }
+    
+    const allFolders = db.getFolders();
+    let currParentId = targetParentId;
+    while (currParentId) {
+      if (currParentId === id) {
+        return res.status(400).json({ error: 'Cannot move a folder inside its own subfolder' });
+      }
+      const parentFolder = allFolders.find(f => f.id === currParentId);
+      currParentId = parentFolder ? parentFolder.parentId : null;
+    }
+
+    gitSync.queueMoveFolder(id, oldParentId, targetParentId, folder.ownerUsername);
+
+    folder.parentId = targetParentId;
+    db.saveFolder(folder);
+
+    res.json({ success: true, folder });
+  } catch (error) {
+    console.error('Move folder error:', error);
+    res.status(500).json({ error: `Failed to move folder: ${error.message}` });
+  }
+});
+
 const server = app.listen(PORT, async () => {
   console.log(`Backend server running on port ${PORT}`);
   await gitSync.initGitRepo();
   seedAdminUser();
+  startSyncLoop(30000);
 });
 // Disable connection timeout to support unlimited-sized uploads and merges
 server.timeout = 0;
